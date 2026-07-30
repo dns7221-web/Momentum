@@ -14,6 +14,15 @@ namespace Momentum.Level
         Ridge,
     }
 
+    /// <summary>옥상 소품을 어디에 놓을지.</summary>
+    public enum RoofPropPlacement
+    {
+        /// <summary>옥상 안쪽에 무작위로 흩는다.</summary>
+        Scatter,
+        /// <summary>옥상 가장자리를 따라 돌린다. 멀리서 실루엣으로 읽힌다.</summary>
+        Perimeter,
+    }
+
     /// <summary>실제 건물 프리팹이 여러 개일 때 어느 것을 놓을지.</summary>
     public enum PrefabPickMode
     {
@@ -65,6 +74,30 @@ namespace Momentum.Level
         [Tooltip("Y축 90° 단위로 무작위 회전. 완성 건물이 3종뿐이라 같은 얼굴이 반복되는 것을 줄인다.")]
         public bool randomYRotation = true;
 
+        [Header("빈 셀 — 격자 규칙성 깨기")]
+        [Tooltip("건물을 세우지 않고 비워 광장으로 남길 확률. " +
+                 "붙어 있는 두 칸이 동시에 비지는 않는다 — 앵커 간격이 두 배가 되면 스윙이 끊긴다.")]
+        [Range(0f, 0.4f)] public float emptyCellChance = 0.12f;
+
+        [Header("옥상 소품")]
+        [Tooltip("옥상에 흩어놓을 것. 스윙 고도에서 가장 오래 보이는 면이 옥상이다.")]
+        public List<GameObject> roofPropPrefabs = new List<GameObject>();
+        public RoofPropPlacement roofPropPlacement = RoofPropPlacement.Scatter;
+        [Min(0)] public int roofPropCountMin = 1;
+        [Min(0)] public int roofPropCountMax = 4;
+        [Tooltip("옥상 가장자리에서 띄울 거리. 난간 밖으로 떨어져 보이지 않게.")]
+        [Min(0f)] public float roofPropEdgeMargin = 2f;
+
+        [Header("광장 — 빈 칸 꾸미기")]
+        [Tooltip("빈 칸을 덮을 바닥 타일. Sidewalk_NoCurb_3m 같은 턱 없는 포장재가 맞다. " +
+                 "비우면 빈 칸에 지면이 그대로 노출되어 '빠뜨린 칸'으로 보인다.")]
+        public GameObject plazaFloorPrefab;
+        [Tooltip("광장에 놓을 것. Sidewalk_Planter · Prop_Planter_Single 등.")]
+        public List<GameObject> plazaPropPrefabs = new List<GameObject>();
+        [Min(0)] public int plazaPropCountMin = 2;
+        [Min(0)] public int plazaPropCountMax = 5;
+        [Min(0f)] public float plazaPropEdgeMargin = 3f;
+
         [Header("껍데기 모드 — 터널링 검증용 (회색 박스에만 적용)")]
         [Tooltip("켜면 속 찬 큐브 대신 얇은 벽 4장 + 옥상으로 만든다. " +
                  "속 찬 큐브에서는 터널링이 관측되지 않으므로, 실제 건물로 교체하기 전에 " +
@@ -82,6 +115,11 @@ namespace Momentum.Level
         [Tooltip("플레이어가 지면에 스치지 않을 여유. 최소 건물 높이 = 로프 길이 + 이 값.")]
         [Min(0f)] public float groundClearance = 5f;
 
+        [Header("성능")]
+        [Tooltip("생성물을 Static으로 표시한다. 도시를 키우면 오브젝트가 수천 개가 되므로 " +
+                 "정적 배칭이 없으면 드로우 콜이 그대로 늘어난다. 도시는 움직이지 않으니 켜도 안전하다.")]
+        public bool markStatic = true;
+
         [Header("지면")]
         [Tooltip("추락을 받아줄 지면. 없으면 스윙을 놓쳤을 때 무한히 떨어진다.")]
         public bool generateGround = true;
@@ -98,6 +136,9 @@ namespace Momentum.Level
         [Tooltip("Street_4WayIntersection 같은 교차로. streetWidth × streetWidth 정사각이어야 한다. " +
                  "비우면 교차로 자리에 지면이 그대로 보인다.")]
         public GameObject intersectionPrefab;
+        [Tooltip("Decal_Crosswalk 같은 횡단보도 데칼. 교차로마다 4방향에 자동으로 깐다. " +
+                 "긴 축이 streetWidth와 맞아야 한다.")]
+        public GameObject crosswalkPrefab;
 
         [Header("외형 (측정에는 영향 없음)")]
         public Material greyboxMaterial;
@@ -190,6 +231,64 @@ namespace Momentum.Level
         }
 
         /// <summary>
+        /// 높이 분포를 만들 때 쓸 층수 범위.
+        ///
+        /// 프리팹을 쓰면 층수도 에셋이 정한다. 여기서 인스펙터 값(6~20층)을 그대로 쓰면
+        /// Ridge 분포가 실제로 존재하지 않는 층수를 목표로 삼아 전부 같은 건물로 수렴한다.
+        /// 그래서 프리팹이 있으면 그 층수 범위로 좁힌다.
+        /// </summary>
+        public Vector2Int EffectiveFloorRange
+        {
+            get
+            {
+                int authoredLow = Mathf.Min(floorCountMin, floorCountMax);
+                int authoredHigh = Mathf.Max(floorCountMin, floorCountMax);
+                if (!HasPrefabs) return new Vector2Int(authoredLow, authoredHigh);
+
+                int low = int.MaxValue, high = int.MinValue;
+                foreach (var prefab in buildingPrefabs)
+                {
+                    var meta = MetaOf(prefab);
+                    if (meta == null) continue;
+                    low = Mathf.Min(low, meta.floorCount);
+                    high = Mathf.Max(high, meta.floorCount);
+                }
+                return low > high ? new Vector2Int(authoredLow, authoredHigh) : new Vector2Int(low, high);
+            }
+        }
+
+        /// <summary>
+        /// 비워둘 칸 표시. 광장이 되어 격자 규칙성을 깬다.
+        ///
+        /// <b>붙어 있는 두 칸을 동시에 비우지 않는다.</b> 빈 칸이 이어지면 앵커 간 거리가
+        /// 두 배(72m)가 되어 이론 사거리(37m)를 훨씬 넘고, 그 구간에서 스윙이 끊긴다.
+        /// 즉 이 제약은 미관이 아니라 물리에서 나온 것이다.
+        /// </summary>
+        public bool[,] BuildEmptyMask()
+        {
+            var empty = new bool[blockCountX, blockCountZ];
+            if (emptyCellChance <= 0f) return empty;
+
+            for (int x = 0; x < blockCountX; x++)
+            {
+                for (int z = 0; z < blockCountZ; z++)
+                {
+                    if (CellRandom(x, z, 53).NextDouble() >= emptyCellChance) continue;
+                    if (x > 0 && empty[x - 1, z]) continue;
+                    if (z > 0 && empty[x, z - 1]) continue;
+                    empty[x, z] = true;
+                }
+            }
+            return empty;
+        }
+
+        /// <summary>옥상 소품 배치용 난수. 격자 좌표에서 결정되므로 재생성해도 같다.</summary>
+        public System.Random RoofPropRandom(int x, int z) => CellRandom(x, z, 71);
+
+        /// <summary>광장 소품 배치용 난수.</summary>
+        public System.Random PlazaPropRandom(int x, int z) => CellRandom(x, z, 89);
+
+        /// <summary>
         /// 격자 좌표에 놓을 프리팹. 좌표만으로 결정되므로 재생성해도 같은 도시가 나온다.
         /// </summary>
         public GameObject PickPrefab(int x, int z, int targetFloors)
@@ -263,18 +362,21 @@ namespace Momentum.Level
             switch (heightMode)
             {
                 case HeightMode.Random:
-                    return CellRandom(x, z, 7).Next(Mathf.Min(floorCountMin, floorCountMax),
-                                                    Mathf.Max(floorCountMin, floorCountMax) + 1);
+                {
+                    var range = EffectiveFloorRange;
+                    return CellRandom(x, z, 7).Next(range.x, range.y + 1);
+                }
 
                 case HeightMode.Ridge:
                 {
                     // 격자 중심에서의 거리를 0~1로 정규화해 높이를 보간한다.
+                    var range = EffectiveFloorRange;
                     float cx = (blockCountX - 1) * 0.5f;
                     float cz = (blockCountZ - 1) * 0.5f;
                     float maxDist = Mathf.Max(0.0001f, Mathf.Sqrt(cx * cx + cz * cz));
                     float dist = Mathf.Sqrt((x - cx) * (x - cx) + (z - cz) * (z - cz));
                     float t = 1f - Mathf.Clamp01(dist / maxDist);
-                    return Mathf.RoundToInt(Mathf.Lerp(floorCountMin, floorCountMax, t));
+                    return Mathf.RoundToInt(Mathf.Lerp(range.x, range.y, t));
                 }
 
                 default:

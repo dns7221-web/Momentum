@@ -111,7 +111,16 @@ namespace Momentum.Level.EditorTools
                 Row("앵커 간격", $"{s.PitchX:F1} × {s.PitchZ:F1} m", "바닥 크기 + 도로 폭");
                 Row("최고 건물 높이", $"{s.MaxHeight:F1} m",
                     s.HasPrefabs ? "프리팹 실측값 — 설정으로 바꿀 수 없다" : null);
-                Row("건물 수", $"{s.TotalBuildings} 채");
+                int emptyCells = CountEmpty(s);
+                Row("건물 수", emptyCells > 0
+                        ? $"{s.TotalBuildings - emptyCells} 채  (빈 칸 {emptyCells})"
+                        : $"{s.TotalBuildings} 채");
+                if (s.heightMode != HeightMode.Uniform)
+                {
+                    var range = s.EffectiveFloorRange;
+                    Row("층수 범위", $"{range.x} ~ {range.y} 층",
+                        s.HasPrefabs ? "프리팹이 가진 범위로 좁혀짐" : null);
+                }
                 Row("스텝당 이동", $"{b.StepDistance:F2} m",
                     $"고정 타임스텝 {Time.fixedDeltaTime * 1000f:F0}ms 기준");
             }
@@ -230,9 +239,22 @@ namespace Momentum.Level.EditorTools
             if (s.heightMode != HeightMode.Uniform)
             {
                 EditorGUILayout.HelpBox(
-                    "측정 단계에서는 Uniform을 권장한다. 높이가 섞이면 " +
-                    "\"여기선 되고 저기선 안 되는\" 상황이 생겨 수치를 읽을 수 없다.",
+                    "물리 측정 단계에서는 Uniform이 낫다. 높이가 섞이면 " +
+                    "\"여기선 되고 저기선 안 되는\" 상황이 생겨 수치를 읽을 수 없다. " +
+                    "외형을 볼 때는 Ridge가 스카이라인을 만든다.",
                     MessageType.Info);
+                clean = false;
+            }
+
+            // 빈 칸은 미관용이지만 물리에 직접 영향을 준다. 인접 배제가 되어 있어도
+            // 비율이 높으면 앵커가 듬성해져 스윙이 끊기는 구간이 생긴다.
+            if (s.emptyCellChance > 0.2f)
+            {
+                EditorGUILayout.HelpBox(
+                    $"빈 칸 확률이 {s.emptyCellChance:P0}다. 붙어 있는 두 칸은 비지 않도록 " +
+                    "막아두었지만, 비율이 높으면 대각선으로 빈 칸이 몰려 앵커가 듬성해진다. " +
+                    "20% 이하를 권한다.",
+                    MessageType.Warning);
                 clean = false;
             }
 
@@ -278,6 +300,14 @@ namespace Momentum.Level.EditorTools
         {
             if (!Application.isPlaying)
                 UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(c.gameObject.scene);
+        }
+
+        private static int CountEmpty(CityLayoutSettings s)
+        {
+            var mask = s.BuildEmptyMask();
+            int count = 0;
+            foreach (bool empty in mask) if (empty) count++;
+            return count;
         }
 
         private static void Row(string label, string value, string hint = null)

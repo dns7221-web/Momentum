@@ -70,10 +70,16 @@ namespace Momentum.Level
             float originX = -(settings.blockCountX - 1) * settings.PitchX * 0.5f;
             float originZ = -(settings.blockCountZ - 1) * settings.PitchZ * 0.5f;
 
+            var emptyMask = settings.BuildEmptyMask();
+            var placed = new List<CityBuilding>();
+
             for (int x = 0; x < settings.blockCountX; x++)
             {
                 for (int z = 0; z < settings.blockCountZ; z++)
                 {
+                    // 빈 칸은 광장으로 남긴다. 도로는 건물과 무관하게 깔리므로 그대로 이어진다.
+                    if (emptyMask[x, z]) continue;
+
                     int targetFloors = settings.FloorCountAt(x, z);
                     var basePos = new Vector3(originX + x * settings.PitchX, 0f, originZ + z * settings.PitchZ);
 
@@ -102,17 +108,203 @@ namespace Momentum.Level
 
                     building.name = $"Building_{x}_{z}_{meta.floorCount}F";
                     if (layer >= 0) SetLayerRecursive(building, layer);
+                    placed.Add(meta);
                 }
             }
 
-            // 도로를 먼저 깐다. 차도가 인도보다 얼마나 파여 있는지를 재고 나서야
-            // 지면을 그보다 아래에 둘 수 있기 때문이다.
-            int roadTiles = CreateRoads(root.transform, originX, originZ, out float roadRecess);
-            if (settings.generateGround) CreateGround(root.transform, roadRecess);
+            int props = CreateRoofProps(root.transform, placed);
 
-            Debug.Log($"[CityGenerator] 건물 {settings.TotalBuildings}채 생성. " +
-                      $"앵커 간격 {settings.PitchX:F1}m / 최고 높이 {settings.MaxHeight:F0}m" +
-                      (roadTiles > 0 ? $" / 도로 타일 {roadTiles}장" : string.Empty), this);
+            // 도로와 광장을 먼저 깐다. 표면이 y=0보다 얼마나 파여 있는지를 재고 나서야
+            // 지면을 그보다 아래에 둘 수 있기 때문이다.
+            int roadTiles = CreateRoads(root.transform, originX, originZ,
+                                        out float surfaceRecess, out int crosswalks);
+            var (plazaFloorTiles, plazaProps) =
+                CreatePlazas(root.transform, emptyMask, originX, originZ, ref surfaceRecess);
+            if (settings.generateGround) CreateGround(root.transform, surfaceRecess);
+
+            if (settings.markStatic) MarkStaticRecursive(root);
+
+            int emptyCells = settings.TotalBuildings - placed.Count;
+            Debug.Log($"[CityGenerator] 건물 {placed.Count}채 생성" +
+                      (emptyCells > 0 ? $" (빈 칸 {emptyCells}개)" : string.Empty) +
+                      $". 앵커 간격 {settings.PitchX:F1}m / 최고 높이 {settings.MaxHeight:F0}m" +
+                      (roadTiles > 0 ? $" / 도로 타일 {roadTiles}장" : string.Empty) +
+                      (crosswalks > 0 ? $" / 횡단보도 {crosswalks}개" : string.Empty) +
+                      (plazaFloorTiles > 0 ? $" / 광장 바닥 {plazaFloorTiles}장" : string.Empty) +
+                      (plazaProps > 0 ? $" / 광장 소품 {plazaProps}개" : string.Empty) +
+                      (props > 0 ? $" / 옥상 소품 {props}개" : string.Empty), this);
+        }
+
+        /// <summary>
+        /// 옥상에 소품을 흩어놓는다.
+        ///
+        /// 스윙 고도에서 시선이 가장 오래 머무는 면이 옥상이다. 지상 소품(볼라드·맨홀)은
+        /// 아무리 깔아도 보이지 않는 반면, 옥상 실외기 몇 개가 체감에 훨씬 크게 기여한다.
+        ///
+        /// 소품을 건물의 자식으로 넣지 않고 별도 루트에 둔다. 프리팹 인스턴스에 자식을
+        /// 추가하면 오버라이드가 쌓이므로, 대신 건물의 <c>TransformPoint</c>로 월드 좌표를
+        /// 계산해 배치한다 — 건물에 준 90° 회전이 그대로 반영된다.
+        /// </summary>
+        private int CreateRoofProps(Transform parent, List<CityBuilding> buildings)
+        {
+            if (buildings.Count == 0 || settings.roofPropCountMax <= 0) return 0;
+
+            // 프리팹별 규격을 한 번만 재둔다. 피벗이 바닥이 아닌 소품도 제자리에 앉게.
+            var specs = new List<(GameObject prefab, Bounds bounds)>();
+            foreach (var prefab in settings.roofPropPrefabs)
+            {
+                if (prefab == null) continue;
+                if (TryMeasurePrefab(prefab, parent, out Bounds bounds)) specs.Add((prefab, bounds));
+            }
+            if (specs.Count == 0) return 0;
+
+            var root = new GameObject("_RoofProps");
+            root.transform.SetParent(parent, false);
+            int layer = LayerMask.NameToLayer(AnchorLayerName);
+
+            int lowCount = Mathf.Min(settings.roofPropCountMin, settings.roofPropCountMax);
+            int highCount = Mathf.Max(settings.roofPropCountMin, settings.roofPropCountMax);
+            int total = 0;
+
+            foreach (var building in buildings)
+            {
+                var rng = settings.RoofPropRandom(building.gridX, building.gridZ);
+                int count = rng.Next(lowCount, highCount + 1);
+
+                float halfX = building.footprint.x * 0.5f - settings.roofPropEdgeMargin;
+                float halfZ = building.footprint.y * 0.5f - settings.roofPropEdgeMargin;
+                if (halfX <= 0f || halfZ <= 0f) continue; // 옥상이 여유분보다 좁으면 건너뛴다
+
+                for (int i = 0; i < count; i++)
+                {
+                    var spec = specs[rng.Next(specs.Count)];
+                    float yaw = (float)rng.NextDouble() * 360f;
+
+                    Vector2 local;
+                    if (settings.roofPropPlacement == RoofPropPlacement.Perimeter)
+                    {
+                        // 가장자리를 균등하게 돈다. 시작 위치만 무작위로 흔들어 건물마다 다르게.
+                        float t = (i + 0.5f) / count + (float)rng.NextDouble();
+                        local = PointOnRectPerimeter(t, halfX, halfZ);
+                    }
+                    else
+                    {
+                        local = new Vector2((float)(rng.NextDouble() * 2.0 - 1.0) * halfX,
+                                            (float)(rng.NextDouble() * 2.0 - 1.0) * halfZ);
+                    }
+
+                    Vector3 spot = building.transform.TransformPoint(
+                        new Vector3(local.x, building.height, local.y));
+
+                    var prop = InstantiateLinked(spec.prefab);
+                    prop.transform.SetParent(root.transform, false);
+                    prop.transform.rotation = Quaternion.Euler(0f, yaw, 0f);
+                    // 소품 자체의 밑면이 옥상에 닿게 내려준다.
+                    prop.transform.position = spot - Vector3.up * spec.bounds.min.y;
+                    if (layer >= 0) SetLayerRecursive(prop, layer);
+                    total++;
+                }
+            }
+
+            return total;
+        }
+
+        /// <summary>
+        /// 직사각형 둘레를 한 바퀴 도는 경로에서 <paramref name="t"/>(0~1) 지점을 돌려준다.
+        /// 옥상 가장자리에 소품을 균등하게 돌리는 데 쓴다.
+        /// </summary>
+        private static Vector2 PointOnRectPerimeter(float t, float halfX, float halfZ)
+        {
+            float width = halfX * 2f;
+            float depth = halfZ * 2f;
+            float distance = Mathf.Repeat(t, 1f) * (width + depth) * 2f;
+
+            if (distance < width) return new Vector2(-halfX + distance, -halfZ);
+            distance -= width;
+            if (distance < depth) return new Vector2(halfX, -halfZ + distance);
+            distance -= depth;
+            if (distance < width) return new Vector2(halfX - distance, halfZ);
+            distance -= width;
+            return new Vector2(-halfX, halfZ - distance);
+        }
+
+        // ─── 광장 ───
+        //
+        // 빈 칸을 그대로 두면 광장이 아니라 "빠뜨린 칸"으로 보인다.
+        // 바닥을 깔고 소품을 몇 개 놓는 것만으로 의도된 공간으로 읽힌다.
+
+        /// <returns>
+        /// (바닥 타일 수, 소품 수)를 나눠 돌려준다. 합쳐서 반환하면 로그에서
+        /// "광장 267개"가 실제로는 대부분 바닥 타일이라는 걸 알 수 없어 혼동을 준다.
+        /// </returns>
+        private (int floorTiles, int props) CreatePlazas(
+            Transform parent, bool[,] emptyMask, float originX, float originZ, ref float surfaceRecess)
+        {
+            bool hasFloor = settings.plazaFloorPrefab != null;
+            var propSpecs = new List<(GameObject prefab, Bounds bounds)>();
+            foreach (var prefab in settings.plazaPropPrefabs)
+            {
+                if (prefab == null) continue;
+                if (TryMeasurePrefab(prefab, parent, out Bounds bounds)) propSpecs.Add((prefab, bounds));
+            }
+            if (!hasFloor && propSpecs.Count == 0) return (0, 0);
+
+            Bounds floorBounds = default;
+            if (hasFloor && !TryMeasurePrefab(settings.plazaFloorPrefab, parent, out floorBounds))
+                hasFloor = false;
+            if (hasFloor) surfaceRecess = Mathf.Max(surfaceRecess, -floorBounds.min.y);
+
+            var root = new GameObject("_Plazas");
+            root.transform.SetParent(parent, false);
+            int layer = LayerMask.NameToLayer(GroundLayerName);
+
+            int lowCount = Mathf.Min(settings.plazaPropCountMin, settings.plazaPropCountMax);
+            int highCount = Mathf.Max(settings.plazaPropCountMin, settings.plazaPropCountMax);
+            int floorTiles = 0;
+            int props = 0;
+
+            for (int x = 0; x < settings.blockCountX; x++)
+            {
+                for (int z = 0; z < settings.blockCountZ; z++)
+                {
+                    if (!emptyMask[x, z]) continue;
+
+                    float cx = originX + x * settings.PitchX;
+                    float cz = originZ + z * settings.PitchZ;
+                    var center = new Vector2(cx, cz);
+
+                    if (hasFloor)
+                    {
+                        floorTiles += TileArea(settings.plazaFloorPrefab, floorBounds, center,
+                                               settings.footprintX, settings.footprintZ, root.transform, layer);
+                    }
+
+                    if (propSpecs.Count == 0) continue;
+
+                    var rng = settings.PlazaPropRandom(x, z);
+                    int count = rng.Next(lowCount, highCount + 1);
+                    float halfX = settings.footprintX * 0.5f - settings.plazaPropEdgeMargin;
+                    float halfZ = settings.footprintZ * 0.5f - settings.plazaPropEdgeMargin;
+                    if (halfX <= 0f || halfZ <= 0f) continue;
+
+                    for (int i = 0; i < count; i++)
+                    {
+                        var spec = propSpecs[rng.Next(propSpecs.Count)];
+                        var prop = InstantiateLinked(spec.prefab);
+                        prop.transform.SetParent(root.transform, false);
+                        prop.transform.localRotation =
+                            Quaternion.Euler(0f, (float)rng.NextDouble() * 360f, 0f);
+                        prop.transform.localPosition = new Vector3(
+                            cx + (float)(rng.NextDouble() * 2.0 - 1.0) * halfX,
+                            -spec.bounds.min.y,
+                            cz + (float)(rng.NextDouble() * 2.0 - 1.0) * halfZ);
+                        if (layer >= 0) SetLayerRecursive(prop, layer);
+                        props++;
+                    }
+                }
+            }
+
+            return (floorTiles, props);
         }
 
         // ─── 도로 ───
@@ -125,9 +317,11 @@ namespace Momentum.Level
         private const float SurfaceEpsilon = 0.01f;
 
         /// <param name="roadRecess">가장 깊이 파인 도로 표면의 깊이. 지면 높이를 정하는 데 쓴다.</param>
-        private int CreateRoads(Transform parent, float originX, float originZ, out float roadRecess)
+        private int CreateRoads(Transform parent, float originX, float originZ, out float roadRecess,
+                                out int crosswalks)
         {
             roadRecess = 0f;
+            crosswalks = 0;
             if (settings.roadSegmentPrefab == null) return 0;
             if (!TryMeasurePrefab(settings.roadSegmentPrefab, parent, out Bounds segment)) return 0;
 
@@ -191,7 +385,64 @@ namespace Momentum.Level
             }
 
             placed += CreateIntersections(roads.transform, originX, originZ, layer, ref roadRecess);
+            crosswalks = CreateCrosswalks(roads.transform, originX, originZ, layer);
             return placed;
+        }
+
+        /// <summary>
+        /// 교차로마다 네 방향 진입부에 횡단보도를 깐다.
+        ///
+        /// 애비뉴(세로, Z축 방향 도로)의 남·북 진입부는 도로 세그먼트와 같은 방향
+        /// 규칙을 쓰고, 스트리트(가로, X축 방향 도로)의 동·서 진입부는 반대로 쓴다.
+        /// 데칼이 도로 표면과 같은 y=0에 놓이면 서로 겹쳐 z-fighting이 나므로 살짝 띄운다.
+        /// </summary>
+        private int CreateCrosswalks(Transform parent, float originX, float originZ, int layer)
+        {
+            if (settings.crosswalkPrefab == null) return 0;
+            if (!TryMeasurePrefab(settings.crosswalkPrefab, parent, out Bounds decal)) return 0;
+
+            float crossSection = Mathf.Max(decal.size.x, decal.size.z);
+            float thickness = Mathf.Max(0.05f, Mathf.Min(decal.size.x, decal.size.z));
+            bool crossAlongZ = decal.size.z >= decal.size.x;
+
+            // 도로 폭보다 좁은 것은 정상이다 — 횡단보도는 차도만 칠하고 인도는 비워두는 게
+            // 맞는 그림이고, 배치는 도로 중심선 기준이라 좁아도 차도 중앙에 그대로 앉는다.
+            // 반대로 도로 폭보다 크면 인도나 건물 쪽으로 삐져나오므로 그 경우만 경고한다.
+            if (crossSection > settings.streetWidth + 0.1f)
+            {
+                Debug.LogWarning(
+                    $"[CityGenerator] 횡단보도 폭이 {crossSection:F2}m인데 도로 폭은 " +
+                    $"{settings.streetWidth:F2}m다. 도로보다 커서 인도 쪽으로 넘친다.", this);
+            }
+
+            float half = settings.streetWidth * 0.5f - thickness * 0.5f;
+            if (half <= 0f)
+            {
+                Debug.LogWarning("[CityGenerator] 횡단보도가 도로 폭보다 두꺼워 놓을 자리가 없다.", this);
+                return 0;
+            }
+
+            int placed = 0;
+            for (int x = 0; x < settings.blockCountX - 1; x++)
+            {
+                for (int z = 0; z < settings.blockCountZ - 1; z++)
+                {
+                    float cx = originX + x * settings.PitchX + settings.PitchX * 0.5f;
+                    float cz = originZ + z * settings.PitchZ + settings.PitchZ * 0.5f;
+
+                    // 애비뉴 진입부 — 남 · 북
+                    PlaceAtIntersection(new Vector2(cx, cz - half), crossAlongZ ? 90f : 0f);
+                    PlaceAtIntersection(new Vector2(cx, cz + half), crossAlongZ ? 90f : 0f);
+                    // 스트리트 진입부 — 서 · 동
+                    PlaceAtIntersection(new Vector2(cx - half, cz), crossAlongZ ? 0f : 90f);
+                    PlaceAtIntersection(new Vector2(cx + half, cz), crossAlongZ ? 0f : 90f);
+                    placed += 4;
+                }
+            }
+            return placed;
+
+            void PlaceAtIntersection(Vector2 pos, float yaw) =>
+                PlaceTile(settings.crosswalkPrefab, decal, pos, yaw, parent, layer, SurfaceEpsilon);
         }
 
         /// <summary>
@@ -216,14 +467,6 @@ namespace Momentum.Level
                 return 0;
             }
 
-            int perSide = Mathf.Max(1, Mathf.RoundToInt(settings.streetWidth / tileSize));
-            if (Mathf.Abs(perSide * tileSize - settings.streetWidth) > 0.1f)
-            {
-                Debug.LogWarning(
-                    $"[CityGenerator] 통로 {settings.streetWidth:F2}m가 교차로 타일 {tileSize:F2}m로 " +
-                    "정확히 나누어지지 않는다. 교차로에 틈이 생긴다.", this);
-            }
-
             roadRecess = Mathf.Max(roadRecess, -cross.min.y);
 
             int placed = 0;
@@ -233,18 +476,42 @@ namespace Momentum.Level
                 {
                     float cx = originX + x * settings.PitchX + settings.PitchX * 0.5f;
                     float cz = originZ + z * settings.PitchZ + settings.PitchZ * 0.5f;
+                    placed += TileArea(settings.intersectionPrefab, cross, new Vector2(cx, cz),
+                                       settings.streetWidth, settings.streetWidth, parent, layer);
+                }
+            }
+            return placed;
+        }
 
-                    for (int i = 0; i < perSide; i++)
-                    {
-                        for (int j = 0; j < perSide; j++)
-                        {
-                            float tx = cx - settings.streetWidth * 0.5f + tileSize * (i + 0.5f);
-                            float tz = cz - settings.streetWidth * 0.5f + tileSize * (j + 0.5f);
-                            PlaceTile(settings.intersectionPrefab, cross, new Vector2(tx, tz), 0f,
-                                      parent, layer);
-                            placed++;
-                        }
-                    }
+        /// <summary>
+        /// 정사각형 구역을 타일로 채운다. 교차로와 광장이 같은 문제라 함께 쓴다.
+        /// 타일 개수는 구역 크기를 타일 크기로 나눠 스스로 정하고, 나누어지지 않으면 경고한다.
+        /// </summary>
+        private int TileArea(GameObject prefab, Bounds bounds, Vector2 center,
+                             float spanX, float spanZ, Transform parent, int layer)
+        {
+            float tileX = Mathf.Max(0.01f, bounds.size.x);
+            float tileZ = Mathf.Max(0.01f, bounds.size.z);
+            int countX = Mathf.Max(1, Mathf.RoundToInt(spanX / tileX));
+            int countZ = Mathf.Max(1, Mathf.RoundToInt(spanZ / tileZ));
+
+            if (Mathf.Abs(countX * tileX - spanX) > 0.1f || Mathf.Abs(countZ * tileZ - spanZ) > 0.1f)
+            {
+                Debug.LogWarning(
+                    $"[CityGenerator] '{prefab.name}' {tileX:F2}×{tileZ:F2}m가 " +
+                    $"{spanX:F1}×{spanZ:F1}m 구역에 정확히 들어가지 않는다 " +
+                    $"({spanX / tileX:F2}×{spanZ / tileZ:F2}장). 틈이나 겹침이 생긴다.", this);
+            }
+
+            int placed = 0;
+            for (int i = 0; i < countX; i++)
+            {
+                for (int j = 0; j < countZ; j++)
+                {
+                    float tx = center.x - spanX * 0.5f + tileX * (i + 0.5f);
+                    float tz = center.y - spanZ * 0.5f + tileZ * (j + 0.5f);
+                    PlaceTile(prefab, bounds, new Vector2(tx, tz), 0f, parent, layer);
+                    placed++;
                 }
             }
             return placed;
@@ -260,7 +527,7 @@ namespace Momentum.Level
         /// 가로 위치는 피벗이 중앙이 아닌 모델도 있으므로 바운즈 중심으로 보정한다.
         /// </summary>
         private void PlaceTile(GameObject prefab, Bounds bounds, Vector2 target, float yaw,
-                               Transform parent, int layer)
+                               Transform parent, int layer, float yOffset = 0f)
         {
             var tile = InstantiateLinked(prefab);
             tile.transform.SetParent(parent, false);
@@ -270,7 +537,7 @@ namespace Momentum.Level
 
             Vector3 pivotOffset = rotation * new Vector3(bounds.center.x, 0f, bounds.center.z);
             tile.transform.localPosition = new Vector3(
-                target.x - pivotOffset.x, 0f, target.y - pivotOffset.z);
+                target.x - pivotOffset.x, yOffset, target.y - pivotOffset.z);
 
             if (layer >= 0) SetLayerRecursive(tile, layer);
         }
@@ -492,6 +759,17 @@ namespace Momentum.Level
             if (settings.greyboxMaterial == null) return;
             var renderer = go.GetComponent<MeshRenderer>();
             if (renderer != null) renderer.sharedMaterial = settings.greyboxMaterial;
+        }
+
+        /// <summary>
+        /// 생성물을 Static으로 표시한다.
+        /// 도시를 10×10으로 키우면 오브젝트가 2천 개를 넘는데, 정적 배칭이 없으면
+        /// 그 수가 드로우 콜로 그대로 나온다. 도시는 움직이지 않으니 전부 켜도 된다.
+        /// </summary>
+        private static void MarkStaticRecursive(GameObject go)
+        {
+            go.isStatic = true;
+            foreach (Transform child in go.transform) MarkStaticRecursive(child.gameObject);
         }
 
         private static void SetLayerRecursive(GameObject go, int layer)
