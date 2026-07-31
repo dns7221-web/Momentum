@@ -62,6 +62,17 @@ namespace Momentum.Player
                  "범위(최고 건물 28m 안팎)를 넘어 튀어 올랐을 때를 잡아내는 값이다.")]
         [SerializeField] private float highFlightHeight = 30f;
 
+        [Header("스윙 자세 — 몸을 로프에 맞춰 기울인다")]
+        [Tooltip("기울일 대상. 비워두면 Animator가 붙은 트랜스폼을 쓴다 — 그게 곧 캐릭터 " +
+                 "메시의 뿌리라 뼈대와 총이 전부 딸려온다. 물리 캡슐이 아니라 이쪽을 돌린다.")]
+        [SerializeField] private Transform visual = null;
+        [Tooltip("초당 최대 회전 각도. 0이면 즉시 맞춘다 — 붙는 순간 몸이 홱 돌아 부자연스럽다.")]
+        [Min(0f)][SerializeField] private float visualTurnSpeedDegPerSec = 360f;
+        [Tooltip("로프 정렬 강도. 1이면 머리가 완전히 로프를 향하고, 0이면 수직으로 선 채 " +
+                 "진행 방향만 본다. 스윙 클립 자체에 이미 기울어진 자세가 구워져 있으므로, " +
+                 "1로 두면 두 번 기울어 과해 보일 수 있다 — 그때 이 값으로 덜어낸다.")]
+        [Range(0f, 1f)][SerializeField] private float ropeAlignment = 1f;
+
         [Header("펌프 · 조종 (InputSystem_Actions ▸ Player ▸ Move, PlayerMovement와 같은 액션)")]
         [Tooltip("PlayerMovement가 켜고 끄는 액션을 그대로 참조만 한다 — 여기서 별도로 " +
                  "Enable/Disable하지 않는다. 둘 다 같은 Player 오브젝트에 있어 생명주기가 같다.")]
@@ -101,6 +112,14 @@ namespace Momentum.Player
         /// <summary>Swing 레이어의 인덱스. 레이어는 이름이 아니라 인덱스로 제어하는 API라 미리 찾아둔다.</summary>
         private int _swingLayerIndex = -1;
 
+        /// <summary>
+        /// 대기 상태에서 시각 레이어가 캡슐에 대해 갖고 있던 로컬 회전.
+        ///
+        /// 놓은 뒤 돌아갈 자리다. 항등이라고 가정하면 메시가 캡슐에 대해 조금이라도 틀어져
+        /// 붙어 있는 프리팹에서 스윙 한 번에 그 틀어짐이 영구히 사라진다.
+        /// </summary>
+        private Quaternion _visualLocalRest = Quaternion.identity;
+
         private void Awake()
         {
             _rb = GetComponent<Rigidbody>();
@@ -119,6 +138,11 @@ namespace Momentum.Player
                     Debug.LogWarning("[SwingConstraint] Animator에 'Swing' 레이어가 없다. " +
                                      "PlayerAnimatorBuilder로 컨트롤러를 다시 만들 것.", this);
             }
+
+            // 기울일 대상도 같은 자리에서 찾는다. Animator가 붙은 트랜스폼이 곧 캐릭터
+            // 메시의 뿌리이고, 뼈대·리그·손에 쥔 총이 전부 그 밑에 있다.
+            if (visual == null && _animator != null) visual = _animator.transform;
+            if (visual != null) _visualLocalRest = visual.localRotation;
         }
 
         private void OnEnable()
@@ -150,6 +174,7 @@ namespace Momentum.Player
         {
             UpdateReelInput();
             UpdateAnimator();
+            UpdateVisualRotation();
         }
 
         private void UpdateReelInput()
@@ -194,6 +219,96 @@ namespace Momentum.Player
             // 레이캐스트로 지면을 다시 찾을 필요 없이 위치의 Y값 자체가 곧 지면 위 높이다.
             bool highFlight = _swinging && _rb.position.y >= highFlightHeight;
             _animator.SetBool(HighFlightHash, highFlight);
+        }
+
+        /// <summary>
+        /// 몸을 로프에 맞춰 기울인다 — 다림추처럼 매달려 있던 문제의 해결책.
+        ///
+        /// <b>물리 캡슐이 아니라 시각 레이어를 돌린다.</b> 캡슐을 기울이면 콜라이더가 같이
+        /// 누워 접지 판정과 착지가 통째로 흔들리는데, 이 프로젝트는 처음부터 "캡슐이 물리
+        /// 몸통이고 스킨 메시는 그 위에 얹히는 시각 레이어"라는 구조라 (<see cref="PlayerMovement"/>
+        /// 클래스 주석) 기울임도 시각 레이어에서 끝내는 것이 맞다. 캡슐은 계속 수직이다.
+        ///
+        /// <c>Rigidbody.freezeRotation</c>을 풀어서 될 일이 아니었다. 거리 구속은 위치와
+        /// 선속도만 건드리고 <b>토크를 한 번도 주지 않으므로</b>, 회전을 물리에 넘겨도
+        /// 로프가 몸을 돌려주지 않는다. 돌릴 각도를 여기서 직접 계산하는 이유가 이것이다.
+        ///
+        /// 축 둘은 이미 다 있는 값이다.
+        /// <list type="bullet">
+        /// <item><b>위</b>는 앵커 방향 — 매달린 것은 머리가 줄을 향한다</item>
+        /// <item><b>앞</b>은 접선 속도 방향 — 실제로 가고 있는 쪽을 본다</item>
+        /// </list>
+        /// 접선 속도는 정의상 로프에 수직이므로 두 축이 직교한다. 따로 직교화할 것이 없다.
+        ///
+        /// <c>Update</c>에서 도는 것이 중요하다. 애니메이터 평가와 리그 계산이 모두 이 뒤에
+        /// 오므로 손 본의 최종 위치가 이 회전을 반영하고, 그래야 <see cref="GrappleGun"/>이
+        /// <c>LateUpdate</c>에서 긋는 로프가 같은 프레임의 총구에서 나간다.
+        /// </summary>
+        private void UpdateVisualRotation()
+        {
+            if (visual == null) return;
+
+            if (!_swinging)
+            {
+                // 이미 제자리로 돌아왔으면 손을 뗀다. 계속 대입하면 이쪽 회전 속도가
+                // 캡슐의 회전 속도(turnSpeedDegPerSec)를 붙잡아, 걷다가 방향을 홱 틀 때
+                // 몸이 캡슐보다 늦게 도는 것이 보인다. 부모-자식 관계가 알아서 해주는
+                // 일을 굳이 뺏어올 이유가 없다.
+                if (Quaternion.Angle(visual.localRotation, _visualLocalRest) < 0.1f)
+                {
+                    visual.localRotation = _visualLocalRest;
+                    return;
+                }
+            }
+
+            // 놓은 뒤에는 캡슐이 다시 방향을 쥔다. 여기서 통째로 리턴하지 않는 이유는
+            // 레이어 가중치와 같다 — 뚝 끊지 않고 같은 속도로 수직 자세에 녹아들게 한다.
+            Quaternion target = _swinging && gun != null
+                ? SwingPose(gun.AnchorPoint)
+                : _rb.rotation * _visualLocalRest;
+
+            visual.rotation = visualTurnSpeedDegPerSec <= 0f
+                ? target
+                : Quaternion.RotateTowards(visual.rotation, target,
+                                           visualTurnSpeedDegPerSec * Time.deltaTime);
+        }
+
+        /// <summary>
+        /// 이번 프레임의 스윙 자세. <see cref="UpdateVisualRotation"/>의 계산 부분만 떼어냈다.
+        /// </summary>
+        private Quaternion SwingPose(Vector3 anchor)
+        {
+            Vector3 toAnchor = anchor - _rb.position;
+            if (toAnchor.sqrMagnitude < 0.0001f) return visual.rotation;
+
+            Vector3 up = toAnchor.normalized;
+
+            Vector3 velocity = _rb.linearVelocity;
+            Vector3 tangent = velocity - up * Vector3.Dot(velocity, up);
+
+            Vector3 forward;
+            if (tangent.sqrMagnitude > 0.01f)
+            {
+                forward = tangent.normalized;
+            }
+            else
+            {
+                // 막 붙어서 접선 속도가 거의 없을 때. 0벡터를 정규화하면 회전이 튀므로,
+                // 지금 보고 있는 쪽을 접선면에 눕혀 그대로 쓴다 — 몸이 제자리를 지킨다.
+                forward = visual.forward - up * Vector3.Dot(visual.forward, up);
+                if (forward.sqrMagnitude < 0.0001f) return visual.rotation;
+                forward.Normalize();
+            }
+
+            Quaternion aligned = Quaternion.LookRotation(forward, up);
+            if (ropeAlignment >= 0.999f) return aligned;
+
+            // 덜 기울이고 싶을 때 섞을 반대편 극단 — 진행 방향만 보고 수직으로 선 자세.
+            Vector3 flat = new Vector3(forward.x, 0f, forward.z);
+            if (flat.sqrMagnitude < 0.0001f) return aligned;
+
+            return Quaternion.Slerp(Quaternion.LookRotation(flat.normalized, Vector3.up),
+                                    aligned, ropeAlignment);
         }
 
         /// <summary>

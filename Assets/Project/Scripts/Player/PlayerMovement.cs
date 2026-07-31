@@ -222,7 +222,14 @@ namespace Momentum.Player
             _rb.linearVelocity = velocity;
             _horizontalSpeed = new Vector2(velocity.x, velocity.z).magnitude;
 
-            if (moveDir.sqrMagnitude > 0.0001f)
+            // 속도와 마찬가지로 회전도 스윙 중에는 넘긴다.
+            //
+            // 이 가드가 없으면 스윙 중에도 몸이 입력 방향으로 돌아가버린다. 그러면 진행
+            // 방향과 무관한 쪽을 보고 날아가고, 입력을 놓는 순간 마지막 각도로 굳는다.
+            // 무엇보다 아래 <c>Vector3.up</c>이 매 스텝 pitch·roll을 0으로 되돌려서,
+            // 로프가 아무리 비스듬해도 몸은 다림추처럼 수직으로 남는다 — 스윙 자세가
+            // 안 나오던 원인이 이 한 줄이었다. 스윙 중 회전은 SwingConstraint가 맡는다.
+            if (!SuspendHorizontalControl && moveDir.sqrMagnitude > 0.0001f)
             {
                 var targetRot = Quaternion.LookRotation(moveDir, Vector3.up);
                 var rotated = Quaternion.RotateTowards(_rb.rotation, targetRot,

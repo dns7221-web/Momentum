@@ -42,6 +42,39 @@ namespace Momentum.Level
 
         public bool HasGenerated => GeneratedRoot != null;
 
+        // ─── 중력 ───
+
+        /// <summary>
+        /// 이 도시를 만들 때 가정한 중력을 <b>실제 물리에도 건다.</b>
+        ///
+        /// 여기가 아니면 자리가 없다. <c>gravityScale</c>은 레벨 메트릭의 입력이고
+        /// (건물 높이·간격·최고 건물이 전부 이 값에서 역산된다), 그 값으로 세운 도시를
+        /// 다른 중력에서 플레이하면 도시가 근거를 잃는다. 생성기가 그 가정의 주인이므로
+        /// 적용도 생성기가 한다 — 프로젝트 설정에 숫자를 따로 적어두면 프리셋을 바꿀 때
+        /// 한쪽만 고치는 사고가 나고, 그게 실제로 났던 사고다.
+        ///
+        /// <b>실제로 났던 사고가 이것이다.</b> 도시는 <c>gravityScale 3</c>(29.43 m/s²)으로
+        /// 생성돼 있었는데 <c>Physics.gravity</c>는 아무도 안 건드려 기본값 9.81로 돌고 있었다.
+        /// 진자 주기가 √3배 늘어져 스윙이 굼떴고, 최저점 속도는 설계의 0.58배밖에 안 나왔으며,
+        /// 무엇보다 <c>SwingConstraint</c>의 펌프 가속도(18)가 중력보다 <b>커져서</b>
+        /// "입력이 물리보다 덜 지배적이어야 한다"는 전제 자체가 뒤집혀 있었다.
+        ///
+        /// <c>Awake</c>인 이유는 <c>Physics.gravity</c>가 캐시되지 않고 매 물리 스텝에
+        /// 읽히기 때문이다. 첫 <c>FixedUpdate</c> 전에만 서 있으면 되고, 그래서 다른
+        /// 스크립트와의 실행 순서를 맞출 필요가 없다.
+        /// </summary>
+        private void Awake()
+        {
+            if (settings == null)
+            {
+                Debug.LogWarning("[CityGenerator] 프리셋이 비어 있어 중력을 기본값으로 둔다. " +
+                                 "도시가 다른 중력을 가정하고 생성됐다면 스윙 주기가 어긋난다.", this);
+                return;
+            }
+
+            Physics.gravity = Vector3.down * settings.GravityMagnitude;
+        }
+
         // ─── 생성 ───
 
         [ContextMenu("Generate")]
