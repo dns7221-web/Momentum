@@ -23,11 +23,22 @@ namespace Momentum.Player
         public float runSpeedThreshold = 8f;
 
         [Header("점프 (jump를 비우면 점프 상태 없이 이동만 만든다)")]
-        [Tooltip("뛰어오르는 순간. 1회 재생 후 airLoop으로 넘어간다.")]
+        [Tooltip("Jump 버튼으로 뛰어오르는 순간. 의도적인 짧은 점프라 공중 루프 없이 " +
+                 "Grounded가 참이 되는 대로 곧장 이동 상태로 돌아간다 — 아래 낙하 사슬과는 별개다.")]
         public AnimationClip jump;
-        [Tooltip("공중에 떠 있는 동안 반복. 비우면 jump가 끝난 뒤 그대로 멈춰 있는다.")]
+
+        [Header("낙하 (버튼 없이 바닥이 사라졌을 때 — 옥상에서 발을 헛디디거나 뛰어내릴 때)")]
+        [Tooltip("낙하가 시작되는 순간. 비우면 곧장 airLoop으로 들어간다.")]
+        public AnimationClip diveStart;
+        [Tooltip("공중에 떠 있는 동안 반복. 짧은 점프에는 안 쓰이고 이 낙하 사슬에서만 쓰인다.")]
         public AnimationClip airLoop;
         [Tooltip("착지. 비우면 착지하는 순간 바로 이동 상태로 돌아간다.")]
         public AnimationClip land;
+
+        [Header("스윙 (둘 다 비우면 스윙 레이어를 만들지 않는다)")]
+        [Tooltip("로프에 매달려 도는 동안. 감고 있지 않을 때 반복 재생된다.")]
+        public AnimationClip swingLoop;
+        [Tooltip("로프를 당겨 몸이 앵커 쪽으로 끌려갈 때. 없으면 감는 동안에도 swingLoop이 유지된다.")]
+        public AnimationClip reelLoop;
     }
 }

@@ -42,15 +42,53 @@ namespace Momentum.Player
         [SerializeField] private InputActionReference sprintAction = null;
         [SerializeField] private InputActionReference jumpAction = null;
 
+        /// <summary>
+        /// 켜면 수평 속도를 입력으로 덮어쓰지 않는다. <see cref="SwingConstraint"/>가 스윙 중에 켠다.
+        ///
+        /// 이 스위치가 필요한 이유는 아래 <c>FixedUpdate</c>가 매 스텝 x·z를 입력값으로
+        /// <b>대입</b>하기 때문이다. 그대로 두면 진자가 만들어낸 접선 속도가 다음 스텝에
+        /// 지워져 스윙이 성립하지 않는다.
+        ///
+        /// 이동 쪽이 갈고리를 알 필요는 없으므로 "누가 끄는지"가 아니라 "꺼졌는지"만 둔다.
+        /// </summary>
+        public bool SuspendHorizontalControl { get; set; }
+
+        [Header("낙하 판정")]
+        [Tooltip("이만큼 연속으로 공중이어야 '진짜 낙하'로 본다. 타일 이음매 · 인도 턱을 " +
+                 "지나갈 때 물리 스텝 한 번만큼 접지가 순간적으로 끊길 수 있는데, 그걸 그대로 " +
+                 "믿으면 걷다가 다이빙 애니메이션이 튀어나온다.")]
+        [Min(0f)][SerializeField] private float fallDebounceSeconds = 0.15f;
+        [Tooltip("이보다 빠르게 아래로 떨어지고 있어야 '진짜 낙하'로 본다. 완만한 언덕을 " +
+                 "속도 붙여 넘을 때도 문턱 시간을 넘겨 살짝 뜰 수 있는데, 그때는 아래로 향하는 " +
+                 "속도가 거의 없다. 중력 ×3에서 옥상 낙하는 이 속도에 금방 도달하지만 " +
+                 "언덕은 그러지 못한다 — 시간만으론 못 가르는 걸 속도로 가른다.")]
+        [Min(0f)][SerializeField] private float fallVelocityThreshold = 3f;
+
         private static readonly int SpeedHash = Animator.StringToHash("Speed");
         private static readonly int GroundedHash = Animator.StringToHash("Grounded");
         private static readonly int JumpHash = Animator.StringToHash("Jump");
+        private static readonly int FallingHash = Animator.StringToHash("Falling");
 
         private Rigidbody _rb;
         private Animator _animator;
 
         /// <summary>이번 물리 스텝에 바닥과 닿아 있는지. 충돌 콜백이 채운다.</summary>
         private bool _isGrounded;
+
+        /// <summary>연속으로 공중에 있던 시간. 착지하는 순간 즉시 0으로 되돌아간다.</summary>
+        private float _airTime;
+
+        /// <summary>
+        /// "진짜 낙하"인지. <see cref="_airTime"/>이 <see cref="fallDebounceSeconds"/>를
+        /// 넘어야 참이 된다.
+        ///
+        /// <see cref="_isGrounded"/>를 애니메이터에 그대로 흘려보내지 않는 이유가 이거다.
+        /// 접지 판정은 물리 스텝 단위(0.005초)라 순간적인 끊김에도 즉시 반응하는데, 그건
+        /// "바닥이 없어졌는가"에는 정확해도 "낙하 애니메이션을 틀어도 되는가"에는 너무 예민하다.
+        /// 착지는 반대로 지연 없이 즉시 반영한다 — 비대칭이다. 떨어지기 시작했다는 판단은
+        /// 신중해야 하지만, 발이 닿았다는 판단은 늦출 이유가 없다.
+        /// </summary>
+        private bool _falling;
 
         /// <summary>
         /// 충돌 콜백이 접촉을 발견하면 켠다.
@@ -140,6 +178,19 @@ namespace Momentum.Player
             // 다음 스텝의 충돌 콜백이 다시 채운다. 발이 떨어지면 아무도 안 채우므로 false로 남는다.
             _groundContact = false;
 
+            if (_isGrounded)
+            {
+                _airTime = 0f;
+                _falling = false;
+            }
+            else
+            {
+                _airTime += Time.fixedDeltaTime;
+                bool longEnough = _airTime >= fallDebounceSeconds;
+                bool fastEnough = _rb.linearVelocity.y <= -fallVelocityThreshold;
+                if (longEnough && fastEnough) _falling = true;
+            }
+
             Vector2 input = moveAction != null ? moveAction.action.ReadValue<Vector2>() : Vector2.zero;
             bool sprinting = sprintAction != null && sprintAction.action.IsPressed();
 
@@ -147,8 +198,11 @@ namespace Momentum.Player
             float targetSpeed = sprinting ? sprintSpeed : walkSpeed;
 
             var velocity = _rb.linearVelocity;
-            velocity.x = moveDir.x * targetSpeed;
-            velocity.z = moveDir.z * targetSpeed;
+            if (!SuspendHorizontalControl)
+            {
+                velocity.x = moveDir.x * targetSpeed;
+                velocity.z = moveDir.z * targetSpeed;
+            }
 
             if (_jumpRequested && _isGrounded)
             {
@@ -184,10 +238,17 @@ namespace Momentum.Player
             // walkSpeed·sprintSpeed와 같은 숫자로 맞추면 튜닝값이 두 곳에서 어긋나지 않는다.
             _animator.SetFloat(SpeedHash, _horizontalSpeed);
             _animator.SetBool(GroundedHash, _isGrounded);
+            _animator.SetBool(FallingHash, _falling);
         }
 
-        /// <summary>입력을 카메라의 수평 방향 기준으로 회전시킨다. 카메라 피치는 무시한다.</summary>
-        private Vector3 CameraRelativeDirection(Vector2 input)
+        /// <summary>
+        /// 입력을 카메라의 수평 방향 기준으로 회전시킨다. 카메라 피치는 무시한다.
+        ///
+        /// <c>internal</c>인 이유는 <see cref="SwingConstraint"/>가 같은 계산을 그대로 쓰기
+        /// 때문이다. "입력이 카메라 기준으로 어느 방향인가"는 지상이든 공중이든 같은 질문이고,
+        /// 답이 두 곳에 따로 있으면 카메라 설정을 바꿀 때 한쪽만 고치는 사고가 난다.
+        /// </summary>
+        internal Vector3 CameraRelativeDirection(Vector2 input)
         {
             if (input.sqrMagnitude < 0.0001f) return Vector3.zero;
 
