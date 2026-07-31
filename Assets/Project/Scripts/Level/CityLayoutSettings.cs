@@ -98,6 +98,16 @@ namespace Momentum.Level
         [Min(0)] public int plazaPropCountMax = 5;
         [Min(0f)] public float plazaPropEdgeMargin = 3f;
 
+        [Header("충돌체 — 이 키트 FBX에는 충돌체가 없다")]
+        [Tooltip("옥상·광장 소품에 생긴 그대로 메시 충돌체를 붙인다. " +
+                 "끄면 플레이어가 화분과 실외기를 그대로 통과한다. " +
+                 "속이 빈 소품은 빈 채로 남아 난간을 뛰어넘어 안에 들어설 수 있다. " +
+                 "프리팹이 이미 충돌체를 들고 있으면 그쪽을 그대로 둔다.")]
+        public bool propColliders = true;
+        [Tooltip("도로·교차로·광장 바닥에 메시 충돌체를 붙인다. 끄면 밟는 바닥이 지면 박스뿐이라, " +
+                 "그보다 높은 인도와 광장 포장재에서 발이 15cm 파묻힌다.")]
+        public bool surfaceColliders = true;
+
         [Header("껍데기 모드 — 터널링 검증용 (회색 박스에만 적용)")]
         [Tooltip("켜면 속 찬 큐브 대신 얇은 벽 4장 + 옥상으로 만든다. " +
                  "속 찬 큐브에서는 터널링이 관측되지 않으므로, 실제 건물로 교체하기 전에 " +
@@ -128,6 +138,18 @@ namespace Momentum.Level
         [Tooltip("지면 두께. 얇은 판은 고속 낙하에서 뚫린다.")]
         [Min(1f)] public float groundThickness = 5f;
         public Material groundMaterial;
+
+        [Header("경계벽 — 도시 바깥을 가린다")]
+        [Tooltip("지면 박스 가장자리를 따라 벽을 두른다. 없으면 지면이 끝나는 선과 " +
+                 "그 너머 허공이 그대로 보인다.")]
+        public bool generateBoundaryWall = true;
+        [Tooltip("벽 높이. 0이면 가장 높은 건물의 1.5배로 자동 계산한다. " +
+                 "건물보다 낮으면 옥상에 올라선 순간 벽 너머가 다시 보인다.")]
+        [Min(0f)] public float boundaryWallHeight = 0f;
+        [Tooltip("벽 두께. 얇으면 스윙 속도로 부딪힐 때 뚫고 나간다.")]
+        [Min(0.5f)] public float boundaryWallThickness = 5f;
+        [Tooltip("비우면 지면 머티리얼을 그대로 쓴다.")]
+        public Material boundaryWallMaterial;
 
         [Header("도로 타일 (선택) — 비우면 지면 머티리얼만 보인다")]
         [Tooltip("Street_2Lane 같은 도로 구간. 폭이 streetWidth와 같아야 한다. " +
@@ -179,6 +201,17 @@ namespace Momentum.Level
         }
 
         public int TotalBuildings => blockCountX * blockCountZ;
+
+        /// <summary>
+        /// 실제로 세울 경계벽 높이.
+        ///
+        /// 자동값을 건물 높이의 2배로 잡는 이유는, 벽이 하는 일이 막는 것이 아니라
+        /// <b>가리는 것</b>이기 때문이다. 눈높이는 최고 옥상까지 올라가고 거기서 벽까지는
+        /// 수백 미터라, 벽이 건물보다 조금 높은 정도로는 내려다보는 각도를 못 막는다.
+        /// 확실히 넘겨야 한다.
+        /// </summary>
+        public float BoundaryWallHeight =>
+            boundaryWallHeight > 0f ? boundaryWallHeight : Mathf.Max(10f, MaxHeight * 2f);
 
         /// <summary>격자가 차지하는 실제 범위. 건물 바닥 바깥 끝까지.</summary>
         public Vector2 CitySpan => new Vector2(

@@ -121,6 +121,7 @@ namespace Momentum.Level
             var (plazaFloorTiles, plazaProps) =
                 CreatePlazas(root.transform, emptyMask, originX, originZ, ref surfaceRecess);
             if (settings.generateGround) CreateGround(root.transform, surfaceRecess);
+            if (settings.generateBoundaryWall) CreateBoundaryWall(root.transform, surfaceRecess);
 
             if (settings.markStatic) MarkStaticRecursive(root);
 
@@ -132,7 +133,10 @@ namespace Momentum.Level
                       (crosswalks > 0 ? $" / 횡단보도 {crosswalks}개" : string.Empty) +
                       (plazaFloorTiles > 0 ? $" / 광장 바닥 {plazaFloorTiles}장" : string.Empty) +
                       (plazaProps > 0 ? $" / 광장 소품 {plazaProps}개" : string.Empty) +
-                      (props > 0 ? $" / 옥상 소품 {props}개" : string.Empty), this);
+                      (props > 0 ? $" / 옥상 소품 {props}개" : string.Empty) +
+                      (settings.generateBoundaryWall
+                          ? $" / 경계벽 {settings.BoundaryWallHeight:F0}m"
+                          : string.Empty), this);
         }
 
         /// <summary>
@@ -202,6 +206,7 @@ namespace Momentum.Level
                     // 소품 자체의 밑면이 옥상에 닿게 내려준다.
                     prop.transform.position = spot - Vector3.up * spec.bounds.min.y;
                     if (layer >= 0) SetLayerRecursive(prop, layer);
+                    if (settings.propColliders) AddMeshColliders(prop);
                     total++;
                 }
             }
@@ -299,6 +304,7 @@ namespace Momentum.Level
                             -spec.bounds.min.y,
                             cz + (float)(rng.NextDouble() * 2.0 - 1.0) * halfZ);
                         if (layer >= 0) SetLayerRecursive(prop, layer);
+                        if (settings.propColliders) AddMeshColliders(prop);
                         props++;
                     }
                 }
@@ -395,6 +401,9 @@ namespace Momentum.Level
         /// 애비뉴(세로, Z축 방향 도로)의 남·북 진입부는 도로 세그먼트와 같은 방향
         /// 규칙을 쓰고, 스트리트(가로, X축 방향 도로)의 동·서 진입부는 반대로 쓴다.
         /// 데칼이 도로 표면과 같은 y=0에 놓이면 서로 겹쳐 z-fighting이 나므로 살짝 띄운다.
+        ///
+        /// 자리는 교차로 사각형 <b>바깥</b>, 진입 차선 위다. 실제 교차로가 그런 모양이기도 하고,
+        /// 안쪽에 넣으면 반드시 겹치기 때문이기도 하다 — 아래 <c>half</c> 참고.
         /// </summary>
         private int CreateCrosswalks(Transform parent, float originX, float originZ, int layer)
         {
@@ -415,11 +424,21 @@ namespace Momentum.Level
                     $"{settings.streetWidth:F2}m다. 도로보다 커서 인도 쪽으로 넘친다.", this);
             }
 
-            float half = settings.streetWidth * 0.5f - thickness * 0.5f;
-            if (half <= 0f)
+            // 교차로 사각형 바깥에 붙인다. 안쪽에 넣으면 네 장이 고리처럼 이어지면서 모서리마다
+            // 서로 물리는데, 그건 값을 조절해서 피할 수 있는 종류가 아니다. 네 장이 안 겹치려면
+            // 도로 폭 ≥ 가로지르는 길이 + 두께 × 2 여야 하고, 이 키트는 5.4 + 4.5×2 = 14.5m라
+            // 12m 도로에 애초에 자리가 없다. 밖으로 빼면 남북 한 쌍과 동서 한 쌍이 아예
+            // 다른 통로에 놓이므로 폭과 무관하게 안 겹친다.
+            float half = settings.streetWidth * 0.5f + thickness * 0.5f;
+
+            // 밖으로 뺀 대신, 이번엔 이웃 교차로에서 마주 보고 오는 장과 통로 한가운데서
+            // 만날 수 있다. 통로 길이는 블록 한 변이므로 두께 두 장이 거기 들어가야 한다.
+            if (thickness * 2f > settings.MinFootprint)
             {
-                Debug.LogWarning("[CityGenerator] 횡단보도가 도로 폭보다 두꺼워 놓을 자리가 없다.", this);
-                return 0;
+                Debug.LogWarning(
+                    $"[CityGenerator] 횡단보도 두께 {thickness:F2}m가 블록 한 변 " +
+                    $"{settings.MinFootprint:F1}m의 절반을 넘는다. 이웃 교차로에서 온 것과 " +
+                    "도로 중간에서 맞물린다.", this);
             }
 
             int placed = 0;
@@ -442,7 +461,8 @@ namespace Momentum.Level
             return placed;
 
             void PlaceAtIntersection(Vector2 pos, float yaw) =>
-                PlaceTile(settings.crosswalkPrefab, decal, pos, yaw, parent, layer, SurfaceEpsilon);
+                PlaceTile(settings.crosswalkPrefab, decal, pos, yaw, parent, layer,
+                          SurfaceEpsilon, collide: false);
         }
 
         /// <summary>
@@ -526,8 +546,12 @@ namespace Momentum.Level
         ///
         /// 가로 위치는 피벗이 중앙이 아닌 모델도 있으므로 바운즈 중심으로 보정한다.
         /// </summary>
+        /// <param name="collide">
+        /// 밟을 수 있는 면인지. 도로·교차로·광장 바닥은 밟는 면이고, 그 위에 얹는 데칼은
+        /// 아니다. 데칼에까지 충돌체를 붙이면 아스팔트 위에 1cm 턱이 하나 생길 뿐이다.
+        /// </param>
         private void PlaceTile(GameObject prefab, Bounds bounds, Vector2 target, float yaw,
-                               Transform parent, int layer, float yOffset = 0f)
+                               Transform parent, int layer, float yOffset = 0f, bool collide = true)
         {
             var tile = InstantiateLinked(prefab);
             tile.transform.SetParent(parent, false);
@@ -540,6 +564,38 @@ namespace Momentum.Level
                 target.x - pivotOffset.x, yOffset, target.y - pivotOffset.z);
 
             if (layer >= 0) SetLayerRecursive(tile, layer);
+            if (collide && settings.surfaceColliders) AddMeshColliders(tile);
+        }
+
+        /// <summary>
+        /// 생긴 그대로 충돌체를 붙인다. 바닥 타일과 소품이 같은 함수를 쓴다 —
+        /// 이 키트 FBX가 전부 충돌체 없이 임포트되어 있다는 같은 사정에서 나온 문제다.
+        ///
+        /// 바운즈 박스로 감싸지 않는 이유가 양쪽에 하나씩 있다.
+        /// 바닥에서는 <c>Street_2Lane</c> 한 장에 인도(y=0)와 아스팔트(y=-0.15)가 같이
+        /// 들어 있어, 박스로 감싸면 윗면이 0으로 평평해져 아스팔트 위를 15cm 떠서 걷게 된다.
+        /// 소품에서는 화분처럼 <b>속이 빈</b> 것이 통째로 막힌 덩어리가 되어, 난간을 뛰어넘어
+        /// 안에 들어서는 것이 불가능해진다. 실제 형상대로 두면 빈 곳은 빈 곳으로 남는다.
+        ///
+        /// 개수가 천 단위지만 물리 메시는 <b>메시 종류당 한 번만</b> 구워져 인스턴스끼리
+        /// 공유된다. 도로 타일 1044장이 도로 메시 하나 값이다.
+        ///
+        /// 대신 오목한 메시라 움직이는 리지드바디에는 붙일 수 없다. 나중에 소품을 집어
+        /// 던지게 만들 때, 그 소품의 충돌체만 <c>convex</c>를 켜야 한다.
+        ///
+        /// 에디터에서 생성해 씬에 저장하는 것을 전제로 한다. 재생 중에 생성하면 원본 메시의
+        /// Read/Write가 꺼져 있는 경우 충돌체를 못 만든다.
+        /// </summary>
+        /// <remarks>프리팹이 이미 충돌체를 들고 있으면 손대지 않는다. 저자가 정해둔 것이 우선이다.</remarks>
+        private static void AddMeshColliders(GameObject go)
+        {
+            if (go.GetComponentInChildren<Collider>() != null) return;
+
+            foreach (var filter in go.GetComponentsInChildren<MeshFilter>())
+            {
+                if (filter.sharedMesh == null) continue;
+                filter.gameObject.AddComponent<MeshCollider>().sharedMesh = filter.sharedMesh;
+            }
         }
 
         /// <summary>
@@ -639,6 +695,73 @@ namespace Momentum.Level
             else Debug.LogWarning(
                 $"[CityGenerator] '{GroundLayerName}' 레이어가 없어 지면을 Default로 둔다. " +
                 "이대로면 웹이 아스팔트에 붙는다.", this);
+        }
+
+        /// <summary>
+        /// 도시를 둘러싸는 벽.
+        ///
+        /// 하는 일은 가두는 것이 아니라 <b>가리는 것이다.</b> 지면 박스는 어디선가 끝나고,
+        /// 그 끝선과 너머의 허공이 눈에 들어오는 순간 도시는 바닥에 얹힌 모형이 된다.
+        /// 그래서 벽은 지면 박스 가장자리에 딱 맞춰 세운다 — 가려야 할 선이 정확히 거기다.
+        ///
+        /// 레이어는 지면이 아니라 <b>앵커다.</b> 즉 웹이 붙는다. 격자 밖까지 날아간 플레이어에게
+        /// 벽은 붙잡을 것이 되고, 벽을 차고 되돌아오는 선택지가 생긴다. 지면과 달리 벽은
+        /// 수직면이라 여기 붙어도 스윙이 지면 견인으로 무너지지 않는다.
+        /// </summary>
+        /// <param name="roadRecess">차도가 y=0보다 파여 있는 깊이. 지면 윗면을 찾는 데 쓴다.</param>
+        private void CreateBoundaryWall(Transform parent, float roadRecess)
+        {
+            var span = settings.CitySpan;
+            float sizeX = span.x + settings.groundMargin * 2f;
+            float sizeZ = span.y + settings.groundMargin * 2f;
+            float thickness = settings.boundaryWallThickness;
+            float height = settings.BoundaryWallHeight;
+
+            if (height < settings.MaxHeight)
+            {
+                Debug.LogWarning(
+                    $"[CityGenerator] 경계벽 {height:F0}m가 최고 건물 {settings.MaxHeight:F0}m보다 " +
+                    "낮다. 옥상에 올라서면 벽 너머가 보인다.", this);
+            }
+
+            var walls = new GameObject("_BoundaryWall");
+            walls.transform.SetParent(parent, false);
+
+            int layer = LayerMask.NameToLayer(AnchorLayerName);
+            var material = settings.boundaryWallMaterial != null
+                ? settings.boundaryWallMaterial
+                : settings.groundMaterial;
+
+            float halfX = sizeX * 0.5f;
+            float halfZ = sizeZ * 0.5f;
+            float baseY = -roadRecess - SurfaceEpsilon;     // 지면 윗면
+            float centerY = baseY + height * 0.5f;
+
+            // 옆벽은 앞뒤벽 두께만큼 짧게 잡는다. 그러지 않으면 네 모서리에서 두 상자의 면이
+            // 정확히 겹쳐 z-fighting이 난다.
+            float sideSpan = Mathf.Max(0.1f, sizeZ - thickness * 2f);
+
+            Slab("North", new Vector3(0f, centerY, halfZ - thickness * 0.5f),
+                 new Vector3(sizeX, height, thickness));
+            Slab("South", new Vector3(0f, centerY, -halfZ + thickness * 0.5f),
+                 new Vector3(sizeX, height, thickness));
+            Slab("East", new Vector3(halfX - thickness * 0.5f, centerY, 0f),
+                 new Vector3(thickness, height, sideSpan));
+            Slab("West", new Vector3(-halfX + thickness * 0.5f, centerY, 0f),
+                 new Vector3(thickness, height, sideSpan));
+
+            void Slab(string side, Vector3 center, Vector3 size)
+            {
+                var slab = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                slab.name = $"Wall_{side}";
+                slab.transform.SetParent(walls.transform, false);
+                slab.transform.localScale = size;
+                slab.transform.localPosition = center;
+
+                if (material != null)
+                    slab.GetComponent<MeshRenderer>().sharedMaterial = material;
+                if (layer >= 0) slab.layer = layer;
+            }
         }
 
         [ContextMenu("Clear")]
@@ -777,6 +900,7 @@ namespace Momentum.Level
             go.layer = layer;
             foreach (Transform child in go.transform) SetLayerRecursive(child.gameObject, layer);
         }
+
 
         // ─── 시각화 ───
         //
