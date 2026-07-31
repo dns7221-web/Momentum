@@ -64,4 +64,5 @@ crashlytics-build.properties
 # OS
 .DS_Store
 Thumbs.db
+Thumbs.db.meta
 desktop.ini
