@@ -46,6 +46,19 @@ namespace Momentum.Player
                  "상한이 없으면 한 스텝에 건물을 뚫고 나가는 속도가 나온다.")]
         [Min(1f)][SerializeField] private float maxSpeed = 60f;
 
+        [Header("릴리즈 — 놓는 순간 위로 쏘아 올린다")]
+        [Tooltip("놓을 때 <b>수평</b> 속력의 몇 %를 상향 속도로 얹을지. 0이면 순수 관성만 남는다 " +
+                 "(물리적으로 정직하지만, 최저점에서 놓으면 수평으로만 날아가 곧 떨어진다). " +
+                 "수평 성분만 재므로 극점(속력 0)과 수직 상승(줄을 타고 오르는 중)에서는 거의 " +
+                 "0이다 — 아치를 그려 벌어둔 속도에만 보상이 붙는다.")]
+        [Range(0f, 1f)][SerializeField] private float releaseUpFraction = 0.5f;
+
+        [Tooltip("상향 속도의 절대 상한(m/s). 비율만 두면 천장이 없어 빠를수록 무한정 " +
+                 "높이 솟는다 — 잘할수록 오래 아무것도 못 하는 구조가 된다. 체공 시간은 " +
+                 "'다음 앵커를 찾는 데 필요한 시간'이라 목표값이 정해진 값이므로, " +
+                 "속도에 비례할 이유가 없는 지점에서 잘라준다. 중력 9.81에서 12면 상승 7.3m · 체공 2.4초.")]
+        [Min(0f)][SerializeField] private float maxReleaseUpSpeed = 12f;
+
         [Header("감기 (InputSystem_Actions ▸ Player ▸ Reel)")]
         [SerializeField] private InputActionReference reelAction = null;
         [Tooltip("휠 한 칸에 목표 길이가 몇 m 바뀌는가. 실제 길이는 아래 속도로 그 목표를 따라간다.")]
@@ -70,8 +83,21 @@ namespace Momentum.Player
         [Min(0f)][SerializeField] private float visualTurnSpeedDegPerSec = 360f;
         [Tooltip("로프 정렬 강도. 1이면 머리가 완전히 로프를 향하고, 0이면 수직으로 선 채 " +
                  "진행 방향만 본다. 스윙 클립 자체에 이미 기울어진 자세가 구워져 있으므로, " +
-                 "1로 두면 두 번 기울어 과해 보일 수 있다 — 그때 이 값으로 덜어낸다.")]
-        [Range(0f, 1f)][SerializeField] private float ropeAlignment = 1f;
+                 "1로 두면 두 번 기울어 과해 보인다.")]
+        [Range(0f, 1f)][SerializeField] private float ropeAlignment = 0.7f;
+
+        [Tooltip("이 속도(m/s) 아래에서는 몸의 방향을 갱신하지 않는다. 아치 극점에서는 " +
+                 "접선 속도가 0에 수렴하는데, 그때 남는 것은 펌프 입력과 솔버 잔여값 " +
+                 "즉 노이즈다. 그걸 방향으로 쓰면 몸이 제자리에서 떤다.")]
+        [Min(0f)][SerializeField] private float facingSpeedThreshold = 4f;
+
+        [Tooltip("몸의 방향이 한 번에 이만큼 넘게 꺾이는 갱신은 버린다. 진자는 극점마다 " +
+                 "진행 방향이 180° 뒤집히는데, 그걸 그대로 따라가면 반주기마다 몸이 " +
+                 "반 바퀴 휘돈다 — 바람 인형처럼 보이던 것의 정체가 이것이다.")]
+        [Range(10f, 180f)][SerializeField] private float maxFacingTurn = 80f;
+
+        [Tooltip("몸의 방향이 목표를 따라가는 속도(초당 각도). 낮을수록 부드럽고 굼뜨다.")]
+        [Min(1f)][SerializeField] private float facingTurnSpeedDegPerSec = 120f;
 
         [Header("펌프 · 조종 (InputSystem_Actions ▸ Player ▸ Move, PlayerMovement와 같은 액션)")]
         [Tooltip("PlayerMovement가 켜고 끄는 액션을 그대로 참조만 한다 — 여기서 별도로 " +
@@ -120,6 +146,16 @@ namespace Momentum.Player
         /// </summary>
         private Quaternion _visualLocalRest = Quaternion.identity;
 
+        /// <summary>
+        /// 몸이 향하고 있는 방향. <b>매 프레임 새로 뽑지 않고 여기에 담아 이어간다.</b>
+        ///
+        /// 접선 속도를 그대로 방향으로 쓰던 것이 바람 인형의 원인이었다. 진자는 왕복하므로
+        /// 극점을 지날 때마다 진행 방향이 180° 뒤집히고, 목표 회전이 그만큼 튀면 몸이
+        /// 반 바퀴 휘돈다. 방향을 상태로 들고 있으면 "지금 값에서 얼마나 움직일 것인가"를
+        /// 물을 수 있고, 그래야 튀는 갱신을 버릴 수 있다.
+        /// </summary>
+        private Vector3 _facing = Vector3.forward;
+
         private void Awake()
         {
             _rb = GetComponent<Rigidbody>();
@@ -156,7 +192,8 @@ namespace Momentum.Player
 
             // 스윙 중에 컴포넌트가 꺼지면 이동 쪽 스위치가 켜진 채로 남는다.
             // 그러면 갈고리를 놓아도 영영 조작이 안 먹는다.
-            if (_swinging) EndSwing();
+            // 플레이어가 놓은 것이 아니므로 릴리즈 보상은 주지 않는다.
+            if (_swinging) EndSwing(boost: false);
         }
 
         /// <summary>
@@ -283,22 +320,12 @@ namespace Momentum.Player
 
             Vector3 up = toAnchor.normalized;
 
-            Vector3 velocity = _rb.linearVelocity;
-            Vector3 tangent = velocity - up * Vector3.Dot(velocity, up);
+            UpdateFacing(up);
 
-            Vector3 forward;
-            if (tangent.sqrMagnitude > 0.01f)
-            {
-                forward = tangent.normalized;
-            }
-            else
-            {
-                // 막 붙어서 접선 속도가 거의 없을 때. 0벡터를 정규화하면 회전이 튀므로,
-                // 지금 보고 있는 쪽을 접선면에 눕혀 그대로 쓴다 — 몸이 제자리를 지킨다.
-                forward = visual.forward - up * Vector3.Dot(visual.forward, up);
-                if (forward.sqrMagnitude < 0.0001f) return visual.rotation;
-                forward.Normalize();
-            }
+            // 몸의 앞을 접선면에 눕힌다. 로프 방향과 직교해야 LookRotation이 안정적이다.
+            Vector3 forward = _facing - up * Vector3.Dot(_facing, up);
+            if (forward.sqrMagnitude < 0.0001f) return visual.rotation;
+            forward.Normalize();
 
             Quaternion aligned = Quaternion.LookRotation(forward, up);
             if (ropeAlignment >= 0.999f) return aligned;
@@ -309,6 +336,38 @@ namespace Momentum.Player
 
             return Quaternion.Slerp(Quaternion.LookRotation(flat.normalized, Vector3.up),
                                     aligned, ropeAlignment);
+        }
+
+        /// <summary>
+        /// 몸이 향할 방향을 <b>조금씩</b> 옮긴다 — 바람 인형을 잡는 함수.
+        ///
+        /// 세 겹으로 거른다. 어느 하나만 빠져도 증상이 돌아온다.
+        ///
+        /// <b>하나, 느릴 때는 갱신하지 않는다.</b> 아치 극점에서 접선 속도는 0에 수렴하는데,
+        /// 그때 남는 것은 펌프 입력과 솔버 잔여값, 즉 노이즈다. 예전 임계값은 0.1m/s라
+        /// 사실상 항상 통과했고, 그래서 극점마다 몸이 제자리에서 떨었다.
+        ///
+        /// <b>둘, 크게 꺾이는 갱신은 버린다.</b> 진자는 극점마다 진행 방향이 <b>정확히
+        /// 180° 뒤집힌다.</b> 그것을 그대로 따라가면 반주기(약 2.7초)마다 몸이 반 바퀴
+        /// 휘도는데, 이게 "행사장 바람 인형"의 정체였다. 실제 웹스윙에서는 아치를 되돌아
+        /// 오기 전에 놓으므로 몸이 뒤돌 일 자체가 없다 — 그 사실을 규칙으로 옮긴 것이다.
+        ///
+        /// <b>셋, 남은 변화도 서서히 따라간다.</b> 통과한 갱신마저 즉시 반영하면 펌프로
+        /// 방향을 틀 때 몸이 홱 돈다.
+        /// </summary>
+        private void UpdateFacing(Vector3 up)
+        {
+            Vector3 velocity = _rb.linearVelocity;
+            Vector3 tangent = velocity - up * Vector3.Dot(velocity, up);
+
+            if (tangent.magnitude < facingSpeedThreshold) return;
+
+            Vector3 candidate = tangent.normalized;
+            if (Vector3.Angle(_facing, candidate) > maxFacingTurn) return;
+
+            _facing = Vector3.RotateTowards(
+                _facing, candidate,
+                facingTurnSpeedDegPerSec * Mathf.Deg2Rad * Time.deltaTime, 0f);
         }
 
         /// <summary>
@@ -325,6 +384,13 @@ namespace Momentum.Player
             else if (!attached && _swinging) EndSwing();
 
             if (!attached) return;
+
+            // 매 스텝 다시 켠다. 한 번만 켜두면(BeginSwing) 다른 쪽이 자기 볼일을 끝내며
+            // 끄는 순간 스윙이 조용히 죽는다 — 실제로 견인(GrappleZip)이 스윙에 취소당하면서
+            // 이 스위치를 같이 꺼버려, 그 뒤로 지상 이동이 매 스텝 수평 속도를 덮어써
+            // 진자가 성립하지 않았다. 상태를 나눠 갖는 대신 <b>원하는 쪽이 계속 주장한다</b>로
+            // 바꾸면, 누가 언제 끄든 다음 스텝에 저절로 회복된다.
+            if (_movement != null) _movement.SuspendHorizontalControl = true;
 
             Vector3 anchor = gun.AnchorPoint;
 
@@ -355,22 +421,83 @@ namespace Momentum.Player
             _maxLength = RopeLength;
             _targetLength = RopeLength;
 
+            // 몸의 방향을 붙는 순간의 진행 방향으로 초기화한다. 이전 스윙에서 쓰던 값을
+            // 그대로 이어받으면, 방향이 크게 달라진 새 스윙에서 UpdateFacing의 "크게
+            // 꺾이는 갱신은 버린다" 규칙에 막혀 영영 못 돌아온다.
+            Vector3 entry = _rb.linearVelocity;
+            entry.y = 0f;
+            _facing = entry.sqrMagnitude > 0.01f ? entry.normalized : transform.forward;
+
             // 지상 이동이 수평 속도를 덮어쓰지 못하게 막는다. 이걸 안 하면 진자가 만든
             // 접선 속도가 다음 스텝에 입력값으로 대체되어 스윙이 그 자리에서 죽는다.
             if (_movement != null) _movement.SuspendHorizontalControl = true;
         }
 
         /// <summary>
-        /// 놓는다. <b>속도에는 손대지 않는다.</b>
+        /// 놓는다. 벌어둔 속도는 그대로 두고, <b>위로 쏘아 올린다.</b>
         ///
-        /// 릴리즈의 쾌감은 벌어둔 속도가 그대로 남는 데서 온다. 여기서 감쇠를 한 줄이라도
-        /// 넣으면 "지킨다" 축이 통째로 사라진다.
+        /// 감쇠는 여전히 한 줄도 없다 — 그걸 넣으면 "지킨다" 축이 통째로 사라진다.
+        /// 대신 여기서 <b>의도적으로 거짓말을 한다.</b> 없던 에너지를 만들어 위로 얹는다.
+        ///
+        /// <b>왜 필요한가 — 총은 손이 하나이기 때문이다.</b> 스파이더맨은 양손을 번갈아 써서
+        /// 앞 웹을 놓기 전에 다음 웹이 이미 나가 있다. 그래서 끊기지 않는다. 총으로는 그
+        /// 교대가 불가능하므로 "놓는다 → <b>날아간다</b> → 다시 겨눈다"라는 박자가 하나 더
+        /// 생기고, <b>날아가는 구간이 곧 다음 앵커를 찾는 시간</b>이 된다. 순수 관성만
+        /// 남기면 최저점에서 놓았을 때 수평 속도뿐이라 곧장 지면으로 떨어지고, 그 박자가
+        /// 아예 생기지 않는다. 2026-08-01 영상에서 스윙 몇 번 만에 지상에 눌러앉아 다시는
+        /// 못 올라가던 것이 이것이었다.
+        ///
+        /// <b>왜 총속력이 아니라 수평 속력에 비례시키는가.</b> 고정값을 얹으면 아무 때나
+        /// 놓아도 같은 보상이 나와 릴리즈 타이밍이 실력이 아니게 된다. 그래서 속도에
+        /// 비례시켜야 하는데, <b>총속력을 쓰면 이미 위로 가고 있는 속도까지 보상해 준다.</b>
+        ///
+        /// 그게 실제로 사고를 냈다. 2026-08-01 영상에서 벽을 따라 줄을 감아 수직으로
+        /// 솟구치던 중에 놓자, 이미 위로 향하던 40 m/s에 다시 50%가 얹혀 상한(60)까지 찬
+        /// 채로 발사됐다 — 중력 9.81에서 정점 <b>183m</b>, 왕복 <b>12초</b>. 도시가 화면에서
+        /// 점이 되고 그동안 아무것도 할 수 없다.
+        ///
+        /// 수평 성분만 재면 세 경우가 전부 옳게 나온다.
+        /// <list type="bullet">
+        /// <item>아치 최저점 — 속도가 온전히 수평이라 보상이 최대다. 원하던 그것</item>
+        /// <item>아치 극점 — 속도가 0이라 보상도 0. 릴리즈 타이밍이 실력으로 남는다</item>
+        /// <item>줄을 타고 수직 상승 중 — 수평 성분이 0이라 보상도 0. <b>로켓이 되지 않는다</b></item>
+        /// </list>
+        /// 즉 "위로 가려면 먼저 앞으로 빨라야 한다"는 규칙 하나로 정리된다. 줄을 감아 벽을
+        /// 오르는 것은 애초에 만들려는 물건이 아니므로(설계 결정 4-2), 그 경로에 보상이
+        /// 붙지 않는 것이 맞다.
+        ///
+        /// 상향은 <b>월드 기준 위</b>다. 로프 방향이 아니라. 로프 기준으로 얹으면 로프가
+        /// 비스듬할 때 옆으로 밀려 진행 방향이 틀어지는데, 여기서 원하는 것은 방향 전환이
+        /// 아니라 체공 시간이다.
         /// </summary>
-        private void EndSwing()
+        /// <param name="boost">
+        /// 상향 임펄스를 얹을지. 컴포넌트가 꺼져서 정리되는 경우(<c>OnDisable</c>)에는
+        /// 플레이어가 놓은 것이 아니므로 보상을 주지 않는다.
+        /// </param>
+        private void EndSwing(bool boost = true)
         {
             _swinging = false;
             RopeLength = 0f;
             if (_movement != null) _movement.SuspendHorizontalControl = false;
+
+            if (!boost || releaseUpFraction <= 0f) return;
+
+            // 수평 성분만 잰다. y를 빼는 이 한 줄이 "이미 위로 가던 속도까지 보상하는" 것을
+            // 막는다 — 줄을 타고 수직으로 솟구치던 중에 놓으면 여기가 0이라 보상이 없다.
+            Vector3 velocity = _rb.linearVelocity;
+            float horizontalSpeed = new Vector2(velocity.x, velocity.z).magnitude;
+            if (horizontalSpeed < 0.01f) return;
+
+            // 비율은 "언제 놓았는가"를 재고, 상한은 "얼마나 높이 갈 수 있는가"를 정한다.
+            // 둘을 함께 두어야 타이밍이 실력으로 남으면서도 폭주하지 않는다.
+            float up = Mathf.Min(horizontalSpeed * releaseUpFraction, maxReleaseUpSpeed);
+
+            // ForceMode.VelocityChange는 질량을 무시하고 속도를 그대로 더한다. 질량을 1로
+            // 두고 튜닝한 값이 나중에 질량을 바꾸는 순간 어긋나는 일을 여기서 미리 막는다.
+            _rb.AddForce(Vector3.up * up, ForceMode.VelocityChange);
+
+            // 감기 증폭과 겹쳐 상한을 넘지 않게 한다 — maxSpeed는 설계값이 아니라 안전장치다.
+            _rb.linearVelocity = Vector3.ClampMagnitude(_rb.linearVelocity, maxSpeed);
         }
 
         /// <summary>

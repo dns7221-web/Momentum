@@ -23,6 +23,26 @@ namespace Momentum.Player
                  "아스팔트에 붙으면 스윙이 아니라 지면 견인이 된다.")]
         [SerializeField] private LayerMask anchorMask;
 
+        [Header("조준 보조")]
+        [Tooltip("정중앙이 빗나갔을 때 크로스헤어에서 이 각도 안까지 후보를 찾아본다. " +
+                 "0이면 보조 없음 — 정확히 겨눈 것만 붙는다. 24m 앞에서 12°면 약 5m 반경이다.")]
+        [Range(0f, 30f)][SerializeField] private float aimAssistAngle = 12f;
+
+        [Tooltip("보조에 쓰는 레이 수. 많을수록 촘촘하지만 한 번 클릭에 이만큼 쏜다. " +
+                 "12개면 5m 반경을 충분히 덮는다.")]
+        [Range(0, 32)][SerializeField] private int aimAssistRays = 12;
+
+        [Tooltip("이보다 가까운 앵커에는 붙지 않는다. <b>발밑 바닥을 쏘는 것을 막는 값이 " +
+                 "이쪽이다.</b> 서 있는 옥상 바닥은 2~5m 거리에 잡히고, 쓸 만한 스윙 앵커는 " +
+                 "15m 이상이라 거리로 깨끗하게 갈린다.")]
+        [Min(0f)][SerializeField] private float minAnchorDistance = 6f;
+
+        [Tooltip("나보다 이 각도만큼 아래인 앵커는 버린다. <b>느슨하게 두는 것이 맞다.</b> " +
+                 "이 게임에서 가장 자주 쓰는 샷은 옥상 높이에서 앞 건물 꼭대기를 쏘는 것이라 " +
+                 "앙각이 0° 근처이고, 크게 튀어 오른 뒤에는 주변이 전부 나보다 아래다. " +
+                 "값을 올리면 그 상황에서 웹이 통째로 안 나간다. -90이면 제한 없음.")]
+        [Range(-90f, 60f)][SerializeField] private float minAnchorElevation = -25f;
+
         [Header("참조")]
         [Tooltip("로프가 나가는 지점. 권총 프리팹 안의 Muzzle. " +
                  "물리에는 쓰지 않고 선을 그릴 때만 쓴다.")]
@@ -65,6 +85,15 @@ namespace Momentum.Player
         /// 건물은 스윙, 가벼운 물체는 끌어오기, 무거운 물체는 내가 끌려가기가 분기 없이 나온다.
         /// </summary>
         public Rigidbody AnchorBody { get; private set; }
+
+        /// <summary>
+        /// 로프를 잠시 다른 목표로 그린다. <c>null</c>이면 평소대로 앵커까지 그린다.
+        ///
+        /// <see cref="GrappleZip"/>이 견인하는 동안 쓴다. 줄을 그리는 책임은 여기 하나로
+        /// 두는 편이 낫다 — LineRenderer를 두 곳에서 만지면 어느 쪽이 껐는지 못 가리는
+        /// 순간이 반드시 온다.
+        /// </summary>
+        public Vector3? OverrideRopeTarget { get; set; }
 
         /// <summary>맞은 콜라이더의 트랜스폼. 부착점을 이것의 로컬 좌표로 들고 있는다.</summary>
         private Transform _anchorTransform;
@@ -136,21 +165,88 @@ namespace Momentum.Player
         /// 들려 흔들리는 물건이라, 총구를 기준으로 삼으면 크로스헤어가 가리키는 곳과 실제로
         /// 맞는 곳이 어긋난다. 총구는 선을 그릴 때만 쓴다.
         /// </summary>
-        private void TryAttach()
+        /// <summary>
+        /// 크로스헤어가 가리키는 앵커를 찾는다. 붙이지는 않는다.
+        ///
+        /// <c>public</c>인 이유는 <see cref="GrappleZip"/>이 <b>같은</b> 판정을 써야 하기
+        /// 때문이다. 레이캐스트를 두 벌 두면 사거리·레이어 마스크·카메라 보정이 언젠가
+        /// 반드시 어긋나고, 그때 "왜 스윙은 붙는데 견인은 안 붙지"를 못 가린다.
+        /// </summary>
+        public bool TryFindAnchor(out RaycastHit hit)
         {
-            if (aimCamera == null) return;
+            hit = default;
+            if (aimCamera == null) return false;
 
             // 사거리는 플레이어 기준인데 레이는 뒤에 있는 카메라에서 나간다. 그 차이만큼
             // 더 쏘고, 맞은 뒤에 플레이어와의 실제 거리로 다시 거른다. 카메라 거리를 빼먹으면
             // 카메라를 당길수록 사거리가 줄어드는 이상한 규칙이 생긴다.
-            float cameraLead = Vector3.Distance(aimCamera.transform.position, transform.position);
-            var ray = aimCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
+            Vector3 origin = aimCamera.transform.position;
+            float distance = maxRange + Vector3.Distance(origin, transform.position);
+            Vector3 center = aimCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f)).direction;
 
-            if (!Physics.Raycast(ray, out RaycastHit hit, maxRange + cameraLead, anchorMask,
+            // 정중앙을 먼저 본다. 겨눈 그대로 붙는 경험이 기본이어야 조준이 조작으로 남는다.
+            if (CastAnchor(origin, center, distance, out hit)) return true;
+
+            if (aimAssistAngle <= 0f || aimAssistRays <= 0) return false;
+
+            // 빗나갔을 때만 부채꼴로 흩어 쏜다. 황금각 나선이라 겹치지 않고 고르게 퍼지고,
+            // 반지름이 i에 따라 <b>단조 증가</b>하므로 <b>처음 맞는 것이 곧 크로스헤어에
+            // 가장 가까운 것</b>이다 — 점수를 매겨 고를 필요가 없다.
+            Vector3 up = aimCamera.transform.up;
+            for (int i = 0; i < aimAssistRays; i++)
+            {
+                float t = (i + 0.5f) / aimAssistRays;
+                float radius = Mathf.Sqrt(t) * aimAssistAngle;   // √ 를 씌워야 면적이 고르다
+                float spin = i * 137.50776f;                     // 황금각(도)
+
+                Vector3 direction = Quaternion.AngleAxis(spin, center)
+                                  * (Quaternion.AngleAxis(radius, up) * center);
+
+                if (CastAnchor(origin, direction, distance, out hit)) return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>레이 하나를 쏘고 사거리·고도까지 전부 통과했는지 본다.</summary>
+        private bool CastAnchor(Vector3 origin, Vector3 direction, float distance, out RaycastHit hit)
+        {
+            if (!Physics.Raycast(origin, direction, out hit, distance, anchorMask,
                                  QueryTriggerInteraction.Ignore))
-                return;
+                return false;
 
-            if (Vector3.Distance(transform.position, hit.point) > maxRange) return;
+            return IsUsableAnchor(hit.point);
+        }
+
+        /// <summary>
+        /// 붙을 만한 앵커인가 — 거리와 고도 둘로 거른다.
+        ///
+        /// <b>거리가 주력이다.</b> 막으려는 것은 "서 있는 옥상 바닥을 쏘는 것"인데, 그건
+        /// 2~5m 앞에 잡히고 쓸 만한 스윙 앵커는 15m 이상이라 거리로 깨끗하게 갈린다.
+        ///
+        /// <b>고도는 보조이고, 느슨해야 한다.</b> 처음에 이걸 10°로 잡았다가 웹이 통째로
+        /// 안 나가는 상태를 만들었다. 이 게임에서 가장 자주 쓰는 샷은 옥상 높이에서 앞
+        /// 건물 꼭대기를 쏘는 것이라 앙각이 0° 근처이고, 릴리즈로 크게 솟은 뒤에는 주변이
+        /// <b>전부 나보다 아래</b>다. 각도로는 "발밑 바닥"과 "앞 건물 꼭대기"를 가를 수 없다.
+        /// </summary>
+        private bool IsUsableAnchor(Vector3 point)
+        {
+            Vector3 toAnchor = point - transform.position;
+
+            if (toAnchor.magnitude > maxRange) return false;
+            if (toAnchor.magnitude < minAnchorDistance) return false;
+
+            float horizontal = new Vector2(toAnchor.x, toAnchor.z).magnitude;
+
+            // 바로 머리 위. 수평 거리가 0이면 각도가 정의되지 않으므로 부호로 가른다.
+            if (horizontal < 0.01f) return toAnchor.y > 0f;
+
+            return Mathf.Atan2(toAnchor.y, horizontal) * Mathf.Rad2Deg >= minAnchorElevation;
+        }
+
+        private void TryAttach()
+        {
+            if (!TryFindAnchor(out RaycastHit hit)) return;
 
             _anchorTransform = hit.collider.transform;
             _anchorLocalPoint = _anchorTransform.InverseTransformPoint(hit.point);
@@ -181,7 +277,20 @@ namespace Momentum.Player
         /// </summary>
         private void LateUpdate()
         {
-            if (!IsAttached) return;
+            // 견인 중에는 줄이 그쪽으로 간다. 붙어 있지 않아도 그려야 하므로 먼저 본다.
+            if (OverrideRopeTarget.HasValue)
+            {
+                SetRopeVisible(true);
+                DrawRope(OverrideRopeTarget.Value);
+                return;
+            }
+
+            if (!IsAttached)
+            {
+                // 견인이 끝난 프레임에 줄이 남아 있지 않게 한다.
+                SetRopeVisible(false);
+                return;
+            }
 
             // 앵커가 사라지는 경우 — 프롭이 파괴되거나 도시를 재생성했을 때.
             if (_anchorTransform == null)
@@ -190,11 +299,16 @@ namespace Momentum.Player
                 return;
             }
 
+            DrawRope(AnchorPoint);
+        }
+
+        private void DrawRope(Vector3 target)
+        {
             if (rope == null || muzzle == null) return;
 
             rope.positionCount = 2;
             rope.SetPosition(0, muzzle.position);
-            rope.SetPosition(1, AnchorPoint);
+            rope.SetPosition(1, target);
         }
 
         private void SetRopeVisible(bool visible)

@@ -53,6 +53,13 @@ namespace Momentum.Player
         /// </summary>
         public bool SuspendHorizontalControl { get; set; }
 
+        [Header("비대칭 중력 — 올라갈 땐 그대로, 내려올 땐 무겁게")]
+        [Tooltip("하강 중에 중력을 몇 배로 걸지. 1이면 정직한 포물선이고, 올릴수록 " +
+                 "정점에 머무는 느낌은 그대로인 채 떨어지는 구간만 짧아진다. " +
+                 "마리오 때부터 거의 모든 점프 게임이 쓰는 방법이다 — 발사의 쾌감은 " +
+                 "올라가는 구간에서 나오고, 지루한 것은 내려오는 구간이기 때문이다.")]
+        [Min(1f)][SerializeField] private float fallGravityMultiplier = 2f;
+
         [Header("낙하 판정")]
         [Tooltip("이만큼 연속으로 공중이어야 '진짜 낙하'로 본다. 타일 이음매 · 인도 턱을 " +
                  "지나갈 때 물리 스텝 한 번만큼 접지가 순간적으로 끊길 수 있는데, 그걸 그대로 " +
@@ -222,6 +229,8 @@ namespace Momentum.Player
             _rb.linearVelocity = velocity;
             _horizontalSpeed = new Vector2(velocity.x, velocity.z).magnitude;
 
+            ApplyFallGravity(velocity);
+
             // 속도와 마찬가지로 회전도 스윙 중에는 넘긴다.
             //
             // 이 가드가 없으면 스윙 중에도 몸이 입력 방향으로 돌아가버린다. 그러면 진행
@@ -236,6 +245,34 @@ namespace Momentum.Player
                     turnSpeedDegPerSec * Time.fixedDeltaTime);
                 _rb.MoveRotation(rotated);
             }
+        }
+
+        /// <summary>
+        /// 하강 중에만 중력을 더 건다 — 죽은 체공 시간을 절반으로 자르는 장치.
+        ///
+        /// 스윙에서 크게 튀어 오른 뒤 <b>내려오기만 하는 몇 초</b>가 이 게임의 가장 지루한
+        /// 구간이다. 올라가는 것은 릴리즈의 보상이라 건드리면 안 되지만, 내려오는 것은
+        /// 아무 정보도 조작도 없는 시간이라 짧을수록 좋다. 그 둘을 갈라 다르게 대우한다.
+        ///
+        /// <b>물리적 거짓말인가.</b> 그렇다. 그리고 마리오 이래 거의 모든 점프 게임이 하는
+        /// 거짓말이다 — 사람은 정점에 머무는 시간을 "체공감"으로 읽고 떨어지는 시간을
+        /// "기다림"으로 읽기 때문에, 둘에 같은 중력을 주면 한쪽이 반드시 틀린다.
+        ///
+        /// <b>추가 가속도로 넣는 이유.</b> <c>Physics.gravity</c> 자체를 바꾸면 도시의
+        /// 모든 강체가 같이 무거워지고, 무엇보다 도시 생성기가 심어둔 중력 가정(설계 결정에
+        /// 따라 레벨 메트릭의 입력이다)이 흔들린다. 이 캡슐 하나에만 얹으면 그 계산은 그대로다.
+        ///
+        /// 배수에서 1을 빼는 것은 유니티가 이미 표준 중력 1인분을 걸어줬기 때문이다.
+        /// 여기서 거는 것은 그 위에 얹는 <b>차액</b>이다.
+        /// </summary>
+        private void ApplyFallGravity(Vector3 velocity)
+        {
+            // 접지 상태에서 얹으면 경사면에서 발이 바닥에 박히듯 눌린다. 올라가는 중에는
+            // 애초에 대상이 아니다 — 그 구간을 그대로 두는 것이 이 함수의 목적이다.
+            if (_isGrounded || velocity.y >= 0f) return;
+
+            float extra = Physics.gravity.y * (fallGravityMultiplier - 1f);
+            _rb.AddForce(new Vector3(0f, extra, 0f), ForceMode.Acceleration);
         }
 
         private void Update()
