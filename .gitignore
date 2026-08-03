@@ -66,3 +66,7 @@ crashlytics-build.properties
 Thumbs.db
 Thumbs.db.meta
 desktop.ini
+
+# 실험용 — 커밋 안 함 (GrappleFireMask 만들다 나온 중간 산출물)
+/Assets/Project/AnimationFold/SwingArmMask 1.mask
+/Assets/Project/AnimationFold/SwingArmMask 1.mask.meta

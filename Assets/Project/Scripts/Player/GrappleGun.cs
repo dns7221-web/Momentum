@@ -43,6 +43,31 @@ namespace Momentum.Player
                  "값을 올리면 그 상황에서 웹이 통째로 안 나간다. -90이면 제한 없음.")]
         [Range(-90f, 60f)][SerializeField] private float minAnchorElevation = -25f;
 
+        [Header("옥상 올려붙이기 — 벽면 앵커는 반드시 벽에 처박힌다")]
+        [Tooltip("벽면을 겨눴을 때 부착점을 그 위 옥상 모서리로 올린다.\n\n" +
+                 "끄면 겨눈 벽면에 그대로 붙는데, 그러면 진자 최저점이 정확히 그 벽면이 되어 " +
+                 "아래로 흔들릴 때마다 건물을 긁는다. 조준 실수가 아니라 궤도 자체가 그렇다.")]
+        [SerializeField] private bool preferRoofAnchors = true;
+
+        [Tooltip("법선의 y가 이 값 이상이면 윗면(옥상·선반)으로 본다. 벽은 0, 옥상은 1이라 " +
+                 "가운데 아무 값이나 들어가면 된다.")]
+        [Range(0f, 1f)][SerializeField] private float roofNormalMinY = 0.5f;
+
+        [Tooltip("옥상으로 올린 부착점을 모서리에서 <b>바깥으로</b> 얼마나 뺄지(m).\n\n" +
+                 "안쪽이 아니라 바깥인 것이 요점이다. 진자 최저점은 앵커 바로 아래인데, " +
+                 "부착점이 옥상 안쪽에 있으면 그 아래가 곧 건물이라 매달리는 순간 벽을 향한다. " +
+                 "모서리 바깥으로 빼야 줄이 파사드를 따라 허공에 드리운다.")]
+        [Min(0f)][SerializeField] private float roofEdgeOffset = 1.5f;
+
+        [Tooltip("진자 최저점이 비어 있는지 검사할 반경(m). 이보다 가까이 건물이 있으면 " +
+                 "부착점을 더 바깥으로 밀어낸다. 플레이어 캡슐 반지름(0.25)보다 넉넉해야 " +
+                 "스치지 않는다.")]
+        [Min(0.1f)][SerializeField] private float hangClearRadius = 1f;
+
+        [Tooltip("옥상으로 못 올렸을 때(사거리 밖 등) 벽면에라도 붙을지. " +
+                 "끄면 그 상황에서 웹이 아예 안 나간다 — 붙는 곳이 나빠도 안 나가는 것보단 낫다.")]
+        [SerializeField] private bool allowWallAnchors = true;
+
         [Header("참조")]
         [Tooltip("로프가 나가는 지점. 권총 프리팹 안의 Muzzle. " +
                  "물리에는 쓰지 않고 선을 그릴 때만 쓴다.")]
@@ -51,9 +76,26 @@ namespace Momentum.Player
         [SerializeField] private LineRenderer rope = null;
         [Tooltip("조준 기준 카메라. 비워두면 Camera.main을 쓴다.")]
         [SerializeField] private Camera aimCamera = null;
+        [Tooltip("발사 애니메이션(GrappleFire 레이어)을 켤 Animator. 비워두면 자식에서 찾는다.")]
+        [SerializeField] private Animator animator = null;
+
+        [Header("발사 애니메이션")]
+        [Tooltip("발사 순간부터 GrappleFire 레이어 가중치를 1로 유지하는 시간(초). " +
+                 "클립 길이보다 조금 짧게 두면 자연스럽게 겹쳐 끊긴다 — 정확히 맞출 필요는 없다.")]
+        [Min(0f)][SerializeField] private float fireLayerHoldTime = 0.4f;
 
         [Header("입력 (InputSystem_Actions.inputactions의 Player 맵에서 드래그)")]
         [SerializeField] private InputActionReference grappleAction = null;
+
+        [Tooltip("버튼을 누르고 있는 동안 계속 다시 쏴본다. 빗나갔거나 벽에 박아 끊겼을 때 " +
+                 "손을 뗐다 다시 누르지 않아도 된다.\n\n" +
+                 "끄면 한 번 놓친 순간 조작이 멈춘다 — 떨어지는 중에 그걸 알아채고 다시 " +
+                 "누르는 시간이 곧 추락이다.")]
+        [SerializeField] private bool retryWhileHeld = true;
+
+        [Tooltip("다시 쏘는 간격(초). 0에 가까우면 매 프레임 레이를 13발씩 쏘고, " +
+                 "방금 박은 자리에 그대로 다시 붙는다.")]
+        [Min(0.02f)][SerializeField] private float retryInterval = 0.12f;
 
         /// <summary>갈고리가 붙어 있는가. 구속이 붙을 때 이 값이 그대로 스위치가 된다.</summary>
         public bool IsAttached { get; private set; }
@@ -95,6 +137,18 @@ namespace Momentum.Player
         /// </summary>
         public Vector3? OverrideRopeTarget { get; set; }
 
+        /// <summary>최저점이 막혔을 때 부착점을 바깥으로 더 밀어보는 횟수와 한 걸음의 크기(m).</summary>
+        private const int ClearanceSteps = 3;
+        private const float ClearanceStep = 1f;
+
+        /// <summary>발사 버튼을 쥐고 있는가. 강제로 끊긴 뒤 다시 쏠지를 이 값이 정한다.</summary>
+        private bool _holding;
+        private float _nextRetryTime;
+
+        private static readonly int FireHash = Animator.StringToHash("Fire");
+        private int _fireLayerIndex = -1;
+        private float _fireWeightUntil;
+
         /// <summary>맞은 콜라이더의 트랜스폼. 부착점을 이것의 로컬 좌표로 들고 있는다.</summary>
         private Transform _anchorTransform;
         private Vector3 _anchorLocalPoint;
@@ -108,6 +162,11 @@ namespace Momentum.Player
         private void Awake()
         {
             if (aimCamera == null) aimCamera = Camera.main;
+            if (animator == null) animator = GetComponentInChildren<Animator>();
+
+            // 레이어가 없으면(GrappleFire 클립을 아직 안 채웠으면) -1로 남고,
+            // 아래 Update의 SetLayerWeight는 -1일 때 아무 것도 안 하게 건너뛴다.
+            if (animator != null) _fireLayerIndex = animator.GetLayerIndex("GrappleFire");
 
             if (muzzle == null || rope == null)
             {
@@ -149,12 +208,77 @@ namespace Momentum.Player
                 grappleAction.action.Disable();
             }
 
+            // 꺼진 채로 쥐고 있던 것으로 남으면, 다시 켜지는 순간 누르지도 않았는데 발사된다.
+            _holding = false;
             Detach();
         }
 
-        private void OnGrapplePerformed(InputAction.CallbackContext ctx) => TryAttach();
+        private void OnGrapplePerformed(InputAction.CallbackContext ctx)
+        {
+            _holding = true;
+            FireAnimation();
+            TryAttach();
+        }
 
-        private void OnGrappleCanceled(InputAction.CallbackContext ctx) => Detach();
+        /// <summary>
+        /// 쏘는 순간 팔 애니메이션을 튕긴다. <see cref="TryAttach"/>와 분리한 이유는,
+        /// 겨눈 게 안 맞아도(하늘·사거리 밖) <b>총은 들어 올려 쏜다</b>는 사실은 그대로라서다.
+        ///
+        /// <see cref="Update"/>의 재시도 루프가 아니라 여기(버튼을 처음 누른 순간)에서만
+        /// 부르는 것도 의도적이다. 재시도는 0.12초마다 도는데, 여기서도 같이 부르면
+        /// 버튼을 쥐고 허공을 겨눈 채로 있는 동안 애니메이션이 연달아 재생돼 팔이
+        /// 파르르 떠는 것처럼 보인다 — 발사 제스처는 누른 순간 한 번이면 충분하다.
+        /// </summary>
+        private void FireAnimation()
+        {
+            if (animator == null) return;
+            animator.SetTrigger(FireHash);
+            _fireWeightUntil = Time.time + fireLayerHoldTime;
+        }
+
+        private void OnGrappleCanceled(InputAction.CallbackContext ctx)
+        {
+            _holding = false;
+            Detach();
+        }
+
+        /// <summary>
+        /// 누르고 있는 동안 계속 다시 쏴본다.
+        ///
+        /// <b>이것이 없으면 한 번 놓친 순간 조작이 통째로 멈춘다.</b> 눌러도 안 붙었거나
+        /// (사거리 밖·하늘) 벽에 박아 강제로 끊겼을 때, 버튼을 쥐고 있어도 아무 일이 안
+        /// 일어나므로 플레이어는 손을 뗐다 다시 눌러야 한다. 초당 20m로 떨어지는 중에
+        /// 그걸 알아채고 다시 누르는 데 드는 시간이 곧 추락이다.
+        ///
+        /// 실력을 깎는 것도 아니다. 어디를 겨눌지는 여전히 플레이어가 정하고, 이 코드는
+        /// <b>같은 판정을 다시 한 번 돌릴 뿐</b>이다. 조준이 나쁘면 여전히 안 붙는다.
+        /// 바뀌는 것은 "쏠 수 있는 순간"이 한 프레임에서 <b>누르고 있는 동안 전체</b>로
+        /// 늘어나는 것뿐이고, 스파이더맨 계열이 전부 이 모양이다.
+        ///
+        /// 간격을 두는 이유는 두 가지다 — 매 프레임 레이를 13발씩 쏘지 않기 위해서,
+        /// 그리고 방금 박은 그 자리에 같은 프레임에 다시 붙는 것을 막기 위해서.
+        /// </summary>
+        private void Update()
+        {
+            UpdateFireLayerWeight();
+
+            if (!retryWhileHeld || !_holding || IsAttached) return;
+            if (Time.time < _nextRetryTime) return;
+
+            _nextRetryTime = Time.time + retryInterval;
+            TryAttach();
+        }
+
+        /// <summary>
+        /// GrappleFire 레이어 가중치를 켰다 끈다. 위 재시도 분기와 달리 매 프레임
+        /// 무조건 돌아야 한다 — 안 그러면 <c>IsAttached</c>가 되는 순간(스윙 시작)
+        /// 이 검사가 통째로 건너뛰어져 발사 애니메이션이 켜진 채로 굳는다.
+        /// </summary>
+        private void UpdateFireLayerWeight()
+        {
+            if (animator == null || _fireLayerIndex < 0) return;
+            animator.SetLayerWeight(_fireLayerIndex, Time.time < _fireWeightUntil ? 1f : 0f);
+        }
 
         // ─── 판정 ───
 
@@ -215,7 +339,74 @@ namespace Momentum.Player
                                  QueryTriggerInteraction.Ignore))
                 return false;
 
-            return IsUsableAnchor(hit.point);
+            // 윗면을 맞았으면 그대로 쓴다. 벽면이면 그 위 옥상으로 올려본다.
+            if (hit.normal.y >= roofNormalMinY) return IsUsableAnchor(hit.point);
+            if (TryLiftToRoof(ref hit)) return true;
+
+            return allowWallAnchors && IsUsableAnchor(hit.point);
+        }
+
+        /// <summary>
+        /// 벽면 앵커를 그 위 옥상 모서리로 올린다.
+        ///
+        /// <b>수직 벽면에 매달리면 진자 최저점이 정확히 그 벽면이다.</b> 앵커에서 로프 길이만큼
+        /// 곧장 아래가 최저점인데, 앵커가 벽에 있으면 그 아래도 벽이기 때문이다. 즉 벽 앵커는
+        /// 조준 실수가 아니라 <b>반드시 건물에 처박히는 궤도</b>이고, 값을 조절해 피할 수 있는
+        /// 종류가 아니다. 건물이 70m가 되면서 사거리 안이 온통 벽면이 되어 이게 기본값이 됐다.
+        ///
+        /// 그렇다고 벽면을 거부하면 README에 적힌 그 실패로 돌아간다 — 고도 제한을 10°로
+        /// 조였다가 "웹이 통째로 안 나가는" 상태를 만들었던 것. <b>거부하는 대신 옮긴다.</b>
+        /// 겨눈 건물은 그대로 두고 부착점만 그 수직선 위 옥상으로 올리면, 플레이어가 고른
+        /// 대상은 바뀌지 않으면서 궤도만 건물 바깥으로 나온다.
+        ///
+        /// 옥상 높이는 맞은 콜라이더의 바운즈 윗면에서 그냥 읽는다. 겹마다 BoxCollider가
+        /// 하나씩이라 그 값이 곧 그 겹의 옥상이고, 아래 겹을 겨누면 셋백 선반에 걸린다 —
+        /// 레이를 한 번 더 쏠 필요가 없다.
+        /// </summary>
+        private bool TryLiftToRoof(ref RaycastHit hit)
+        {
+            if (!preferRoofAnchors || hit.collider == null) return false;
+
+            Vector3 outward = new Vector3(hit.normal.x, 0f, hit.normal.z);
+            if (outward.sqrMagnitude < 0.0001f) return false;
+            outward.Normalize();
+
+            Vector3 top = new Vector3(hit.point.x, hit.collider.bounds.max.y, hit.point.z);
+
+            // 한 번에 못 비우면 조금씩 더 바깥으로 밀어본다. 셋백 때문에 한 겹 바깥으로
+            // 빼도 그 아래 넓은 겹이 여전히 걸리는 경우가 있어서, 될 때까지 물러난다.
+            for (int step = 0; step <= ClearanceSteps; step++)
+            {
+                Vector3 candidate = top + outward * (roofEdgeOffset + step * ClearanceStep);
+
+                // 멀어질수록 사거리 밖으로 나간다. 거기서 끊는 것이 맞다 — 더 밀어봐야 못 붙는다.
+                if (!IsUsableAnchor(candidate)) return false;
+                if (IsHangBlocked(candidate)) continue;
+
+                hit.point = candidate;
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// 이 앵커에 매달리면 진자 최저점이 건물 속인가.
+        ///
+        /// 스윙이 벽에 처박히느냐를 결정하는 것은 조준 각도가 아니라 이 한 점이다.
+        /// 최저점은 앵커에서 로프 길이만큼 곧장 아래이고, 로프 길이는 붙는 순간의 거리다
+        /// (<c>SwingConstraint.BeginSwing</c>). 그러니 붙기 <b>전에</b> 그 지점이 비어 있는지
+        /// 보면 "이 웹을 쏘면 처박힌다"를 미리 알 수 있다.
+        ///
+        /// 아치 전체가 아니라 최저점 하나만 본다. 가장 깊이 파고드는 지점이라 여기가 비면
+        /// 나머지도 대체로 비고, 검사 하나로 끝나 조준할 때마다 돌려도 부담이 없다.
+        /// </summary>
+        private bool IsHangBlocked(Vector3 anchor)
+        {
+            float rope = Vector3.Distance(anchor, transform.position);
+            Vector3 bottom = anchor + Vector3.down * rope;
+            return Physics.CheckSphere(bottom, hangClearRadius, anchorMask,
+                                       QueryTriggerInteraction.Ignore);
         }
 
         /// <summary>
@@ -254,6 +445,28 @@ namespace Momentum.Player
             IsAttached = true;
 
             SetRopeVisible(true);
+        }
+
+        /// <summary>
+        /// 바깥에서 강제로 떼어낸다. 지금은 <see cref="SwingConstraint"/>가 건물에 정면으로
+        /// 박았을 때 쓴다.
+        ///
+        /// 부착 여부의 주인이 여기 하나여야 하기 때문에 이 경로가 필요하다. 구속 쪽에서
+        /// 스윙만 끄면 <c>FixedUpdate</c>가 다음 스텝에 <see cref="IsAttached"/>를 다시 읽어
+        /// 그대로 재부착하고, 그때 로프 길이가 현재 거리로 새로 잡혀 벽에 붙은 채 줄만
+        /// 다시 팽팽해진다.
+        ///
+        /// 버튼을 누르고 있는 중이라도 뗀다. 다시 쏘려면 손을 놓았다 눌러야 하는데,
+        /// 그게 맞다 — 박은 자리에 그대로 다시 붙는 것을 막아준다.
+        /// </summary>
+        public void ForceDetach()
+        {
+            if (!IsAttached) return;
+            Detach();
+
+            // 버튼을 쥐고 있으면 곧 다시 쏜다(<see cref="Update"/>). 박은 그 자리에 같은
+            // 프레임에 도로 붙지 않게 한 박자만 쉰다 — 그 사이 몸이 튕겨 나가 조준이 달라진다.
+            _nextRetryTime = Time.time + retryInterval;
         }
 
         /// <summary>붙은 것을 놓는다. 속도에는 손대지 않는다 — 관성이 곧 보상이다.</summary>

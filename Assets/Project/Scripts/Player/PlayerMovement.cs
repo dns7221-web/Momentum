@@ -23,6 +23,32 @@ namespace Momentum.Player
         [SerializeField] private float turnSpeedDegPerSec = 540f;
         [SerializeField] private float jumpSpeed = 6f;
 
+        [Header("에어 컨트롤 — 공중에서는 대입이 아니라 가속이다")]
+        [Tooltip("공중에서 입력이 수평 속도를 바꾸는 최대 가속도(m/s²).\n\n" +
+                 "값 하나가 두 상황을 다 감당한다. 정지 → 걷기 속도(4)는 0.3초라 점프 중 " +
+                 "조작이 답답하지 않고, 릴리즈 직후 30m/s를 90° 트는 데는 3초가 넘어 " +
+                 "사실상 못 튼다. 올릴수록 공중이 조종에 가까워지고, 내릴수록 관성에 " +
+                 "맡기게 된다.\n\n" +
+                 "스윙의 펌프(SwingConstraint)보다 낮게 두는 것이 전제다 — 매달리지 않고도 " +
+                 "더 잘 날아가면 로프를 걸 이유가 없어진다.")]
+        [Min(0f)][SerializeField] private float airAcceleration = 12f;
+
+        [Tooltip("접지 상태에서 이보다 작은 상향 속도는 매 스텝 0으로 지운다. " +
+                 "인도 턱 같은 단차에서 depenetration이 얹는 잔여 튐을 지우기 위한 값이다.\n\n" +
+                 "jumpSpeed보다 확실히 낮게 둘 것 — 점프 직후 한 프레임 접지 신호가 " +
+                 "남았을 때 이 값이 점프 속도까지 지워버리면 점프가 거의 안 뛰는 것처럼 된다.")]
+        [Min(0f)][SerializeField] private float residualLiftClamp = 2f;
+
+        [Header("안전망 — 도시 밖으로 날아가는 것에 대한 최후 방어선")]
+        [Tooltip("원점에서 이 거리(XZ)를 넘으면 마지막 접지 위치로 되돌린다.")]
+        [Min(1f)][SerializeField] private float safeRadius = 500f;
+        [Tooltip("이 높이(Y, 위아래 모두)를 넘으면 마지막 접지 위치로 되돌린다.")]
+        [Min(1f)][SerializeField] private float safeHeight = 300f;
+        private Vector3 _lastSafePosition;
+
+        /// <summary>지난 스텝의 SuspendHorizontalControl 값. 스윙을 막 놓은 프레임을 잡아낸다.</summary>
+        private bool _wasSuspended;
+
         [Header("지면 판정")]
         [Tooltip("이 각도보다 가파른 면은 바닥이 아니라 벽으로 본다. 벽 점프를 막는 값.")]
         [Range(0f, 89f)][SerializeField] private float maxSlopeAngle = 50f;
@@ -65,13 +91,19 @@ namespace Momentum.Player
                  "지나갈 때 물리 스텝 한 번만큼 접지가 순간적으로 끊길 수 있는데, 그걸 그대로 " +
                  "믿으면 걷다가 다이빙 애니메이션이 튀어나온다.")]
         [Min(0f)][SerializeField] private float fallDebounceSeconds = 0.15f;
-        [Tooltip("이보다 빠르게 아래로 떨어지고 있어야 '진짜 낙하'로 본다. 완만한 언덕을 " +
-                 "속도 붙여 넘을 때도 문턱 시간을 넘겨 살짝 뜰 수 있는데, 그때는 아래로 향하는 " +
-                 "속도가 거의 없다. 중력 ×3에서 옥상 낙하는 이 속도에 금방 도달하지만 " +
-                 "언덕은 그러지 못한다 — 시간만으론 못 가르는 걸 속도로 가른다.")]
-        [Min(0f)][SerializeField] private float fallVelocityThreshold = 3f;
+        [Tooltip("이보다 빠르게 아래로 떨어지고 있어야 '진짜 낙하'로 본다.\n\n" +
+                 "3(옛값)은 이 중력(gravityScale 1.5 → 14.7 m/s²)에서 시간 문턱(0.15초)과 " +
+                 "사실상 같은 시점에 도달한다 — 자유낙하로 0.15초면 이미 2.2m/s, 0.2초면 3m/s라 " +
+                 "속도 조건이 시간 조건에 얹혀 따라올 뿐 독립된 안전장치가 못 됐다. 그래서 " +
+                 "전력질주로 완만한 언덕 정상을 넘을 때(짧게 뜨지만 실제 낙하는 아님)도 " +
+                 "걸러지지 않고 낙하로 오판됐다.\n\n" +
+                 "6은 자유낙하 0.4초(≈1.2m 낙하)에 해당한다 — 시간 문턱의 두 배가 넘는 " +
+                 "여유를 둬서, 언덕 정상에서 잠깐 뜨는 것과 실제로 뭔가에서 떨어지는 것을 " +
+                 "속도로 확실히 가른다. 중력 배율을 바꾸면 이 값도 같이 다시 볼 것.")]
+        [Min(0f)][SerializeField] private float fallVelocityThreshold = 6f;
 
         private static readonly int SpeedHash = Animator.StringToHash("Speed");
+        private static readonly int AirTimeHash = Animator.StringToHash("AirTime");
         private static readonly int GroundedHash = Animator.StringToHash("Grounded");
         private static readonly int JumpHash = Animator.StringToHash("Jump");
         private static readonly int FallingHash = Animator.StringToHash("Falling");
@@ -181,12 +213,39 @@ namespace Momentum.Player
 
         private void FixedUpdate()
         {
+            // 최후의 방어선. 먼 릴리즈 거리와 큰 상승 보정이 겹치면 언젠가 도시 경계를
+            // 넘어갈 수 있다 — 아직은 안 났지만, 나면 그 아래는 무한 낙하뿐이다.
+            // 값을 정교하게 맞추는 대신, 접지된 마지막 위치로 그냥 되돌린다.
+            if (_isGrounded) _lastSafePosition = _rb.position;
+            else if (Mathf.Abs(_rb.position.x) > safeRadius ||
+                     Mathf.Abs(_rb.position.z) > safeRadius ||
+                     _rb.position.y > safeHeight || _rb.position.y < -safeHeight)
+            {
+                _rb.position = _lastSafePosition;
+                _rb.linearVelocity = Vector3.zero;
+            }
+
             _isGrounded = _groundContact;
             // 다음 스텝의 충돌 콜백이 다시 채운다. 발이 떨어지면 아무도 안 채우므로 false로 남는다.
             _groundContact = false;
 
+            // 스윙을 막 놓은 프레임인지. 아래 두 곳에서 쓴다.
+            bool justReleasedSwing = _wasSuspended && !SuspendHorizontalControl;
+            _wasSuspended = SuspendHorizontalControl;
+
             if (_isGrounded)
             {
+                _airTime = 0f;
+                _falling = false;
+            }
+            else if (justReleasedSwing)
+            {
+                // <b>놓는 순간 낙하 판정을 리셋한다.</b> _falling은 한 번 참이 되면 착지할
+                // 때까지 latch되는데, 스윙 중에는 아치 하강 구간마다 하강 속도가 문턱을
+                // 넘으므로 사실상 항상 참인 채로 릴리즈를 맞는다. 그 상태로 놓으면 공중
+                // 자세(AirIdle)가 뜨자마자 Falling 조건에 걸려 곧장 낙하 사슬로 넘어가버려
+                // 한 프레임도 안 보인다 — "가끔만 나온다"의 정체가 이것이었다.
+                // 릴리즈는 새로운 공중 구간의 시작이므로 여기서 처음부터 다시 센다.
                 _airTime = 0f;
                 _falling = false;
             }
@@ -204,11 +263,41 @@ namespace Momentum.Player
             Vector3 moveDir = CameraRelativeDirection(input);
             float targetSpeed = sprinting ? sprintSpeed : walkSpeed;
 
+            // 놓은 바로 그 한 스텝은 접지 여부와 무관하게 공중 취급한다. 앵커 근처에서
+            // 놓으면(건물에 스치듯 붙어 있던 경우 등) 접지 신호가 한 스텝 잔류할 수 있는데,
+            // 그때 아래 grounded 분기가 걸리면 입력이 없을 때 속도를 0으로 대입해버려
+            // 날아가던 몸이 그 자리에 뚝 멈춘다. 점프 직후 잔류 접지가 점프 속도를 지우던
+            // 것과 같은 종류의 사고다.
             var velocity = _rb.linearVelocity;
             if (!SuspendHorizontalControl)
             {
-                velocity.x = moveDir.x * targetSpeed;
-                velocity.z = moveDir.z * targetSpeed;
+                // 지상에서만 대입한다. 공중까지 대입하면 <b>릴리즈한 다음 스텝에 스윙으로
+                // 벌어둔 수평 속도가 걷기 속도로 지워진다</b> — 30m/s로 날아가야 할 몸이 4m/s가
+                // 되고, y는 안 건드리므로 상향 보상만 남아 거의 수직으로 솟는다.
+                // "놓는 순간 위로 솟는다"의 실체가 이것이었다. 관성이 곧 릴리즈의 보상인데
+                // 그 보상을 지상 이동 로직이 한 스텝 만에 회수하고 있었다.
+                if (_isGrounded && !justReleasedSwing)
+                {
+                    velocity.x = moveDir.x * targetSpeed;
+                    velocity.z = moveDir.z * targetSpeed;
+
+                    // 인도 턱 같은 단차를 넘을 때 depenetration이 얹은 잔여 상승 속도를
+                    // 여기서 지운다. 안 지우면 중력이 서서히 깎아줄 때까지 몇 스텝 남아있고,
+                    // 턱을 빠르게 연속으로 넘으면 이전 턱의 잔여값에 다음 턱의 튕김이 또
+                    // 얹혀 넘을 때마다 점점 높이 뜬다.
+                    //
+                    // <b>작은 값만</b> 지운다. 점프한 바로 다음 스텝에도 접촉이 아직 남아
+                    // _isGrounded가 잠깐 true로 다시 읽힐 수 있는데(위 점프 코드의 주석 참고),
+                    // 크기를 안 가리고 지우면 그 프레임에 막 얹은 점프 속도(jumpSpeed)까지
+                    // 여기서 죽어 점프가 거의 안 뛰는 것처럼 보인다. 턱의 잔여값(최대 약
+                    // Project Settings의 Max Depenetration Velocity)은 점프 속도보다 훨씬
+                    // 작으므로, 그 사이 어딘가에 문턱을 두면 점프는 안 건드리고 턱 튐만 잡는다.
+                    if (velocity.y > 0f && velocity.y < residualLiftClamp) velocity.y = 0f;
+                }
+                else
+                {
+                    ApplyAirControl(ref velocity, moveDir, targetSpeed);
+                }
             }
 
             if (_jumpRequested && _isGrounded)
@@ -238,13 +327,73 @@ namespace Momentum.Player
             // 무엇보다 아래 <c>Vector3.up</c>이 매 스텝 pitch·roll을 0으로 되돌려서,
             // 로프가 아무리 비스듬해도 몸은 다림추처럼 수직으로 남는다 — 스윙 자세가
             // 안 나오던 원인이 이 한 줄이었다. 스윙 중 회전은 SwingConstraint가 맡는다.
-            if (!SuspendHorizontalControl && moveDir.sqrMagnitude > 0.0001f)
+            if (!SuspendHorizontalControl)
             {
-                var targetRot = Quaternion.LookRotation(moveDir, Vector3.up);
-                var rotated = Quaternion.RotateTowards(_rb.rotation, targetRot,
-                    turnSpeedDegPerSec * Time.fixedDeltaTime);
-                _rb.MoveRotation(rotated);
+                // 공중에서 빠를 때는 입력이 아니라 <b>실제 진행 방향</b>을 본다.
+                //
+                // 에어 컨트롤이 대입에서 가속으로 바뀌면서 둘이 갈라졌다. 전에는 공중에서도
+                // 속도가 곧 입력이라 입력을 보는 것이 곧 진행 방향을 보는 것이었는데, 이제
+                // 30m/s로 날아가는 중에 방향키를 톡 누르면 몸만 그쪽으로 돈다. 그건 README가
+                // 치명적 결함으로 분류한 "진행 방향을 안 보는 것"이다.
+                //
+                // 기준을 전력질주 속도로 삼으면 새 값이 필요 없다. 평범한 점프는 그 이하라
+                // 지금까지처럼 입력을 보고, 스윙에서 놓고 날아가는 속도는 언제나 그 위다.
+                Vector3 facing = moveDir;
+                if (!_isGrounded)
+                {
+                    var flight = new Vector3(velocity.x, 0f, velocity.z);
+                    if (flight.sqrMagnitude > sprintSpeed * sprintSpeed)
+                        facing = flight.normalized;
+                }
+
+                if (facing.sqrMagnitude > 0.0001f)
+                {
+                    var targetRot = Quaternion.LookRotation(facing, Vector3.up);
+                    var rotated = Quaternion.RotateTowards(_rb.rotation, targetRot,
+                        turnSpeedDegPerSec * Time.fixedDeltaTime);
+                    _rb.MoveRotation(rotated);
+                }
             }
+        }
+
+        /// <summary>
+        /// 공중에서의 이동 입력 — 대입이 아니라 <b>가속</b>이다.
+        ///
+        /// 지상은 대입이 맞다. 발이 땅에 있으면 마찰로 원하는 속도를 즉시 낼 수 있고,
+        /// 조작이 즉각적이어야 걷는 맛이 산다. 공중은 반대다. 붙잡을 것이 없는데 속도를
+        /// 갈아치울 수 있으면 그건 이동이 아니라 순간이동이고, 무엇보다 <b>벌어둔 관성이
+        /// 입력 한 번에 사라진다.</b>
+        ///
+        /// 두 줄이 이 함수의 전부다.
+        ///
+        /// <b>하나, 목표 속력은 현재 속력과 지상 속도 중 큰 쪽이다.</b> 이 한 줄이
+        /// "입력이 관성을 깎지 못한다"를 만든다 — 30m/s로 날다가 진행 방향을 눌러도
+        /// 목표가 4가 아니라 30이라 느려지지 않고, 그냥 걸어 다닐 때는 목표가 4로
+        /// 남아 평소와 같다.
+        ///
+        /// <b>둘, 거기까지 가는 속도를 <see cref="airAcceleration"/>으로 제한한다.</b>
+        /// 가속도가 하나뿐인데도 필요한 비대칭이 저절로 나온다 — 정지에서 걷기 속도까지는
+        /// 0.3초면 닿아 점프 중 조작이 답답하지 않지만, 30m/s를 90° 틀려면 Δv가 42m/s라
+        /// 3초가 넘어 사실상 불가능하다. <b>느릴 때는 조작이고 빠를 때는 관성이다.</b>
+        ///
+        /// 입력이 없으면 아무것도 하지 않는다. 목표를 0으로 두면 손을 떼는 순간 공중에서
+        /// 제동이 걸려, 릴리즈하고 손을 놓는 가장 흔한 조작이 그대로 감속이 된다.
+        /// 반대로 <b>진행 반대쪽을 누르면 목표가 뒤를 향하므로 자연히 브레이크가 된다</b> —
+        /// 스윙의 펌프가 "미는 방향과 반대면 느려진다" 하나로 가속과 제동을 함께 얻는 것과
+        /// 같은 구조이고, 규칙을 새로 만들지 않았다.
+        /// </summary>
+        private void ApplyAirControl(ref Vector3 velocity, Vector3 moveDir, float targetSpeed)
+        {
+            if (moveDir.sqrMagnitude < 0.0001f) return;
+
+            var horizontal = new Vector3(velocity.x, 0f, velocity.z);
+            Vector3 desired = moveDir * Mathf.Max(horizontal.magnitude, targetSpeed);
+
+            horizontal = Vector3.MoveTowards(
+                horizontal, desired, airAcceleration * Time.fixedDeltaTime);
+
+            velocity.x = horizontal.x;
+            velocity.z = horizontal.z;
         }
 
         /// <summary>
@@ -283,6 +432,10 @@ namespace Momentum.Player
             _animator.SetFloat(SpeedHash, _horizontalSpeed);
             _animator.SetBool(GroundedHash, _isGrounded);
             _animator.SetBool(FallingHash, _falling);
+            // AirIdle 진입에 쓴다 — Grounded 하나만 보면 인도 턱 같은 한 스텝짜리 순간
+            // 접지 끊김까지 잡아버린다. Falling이 시간+속도로 이 문제를 피하는 것과
+            // 같은 이유로, AirIdle 쪽도 raw !Grounded 대신 누적 공중 시간에 문턱을 둔다.
+            _animator.SetFloat(AirTimeHash, _airTime);
         }
 
         /// <summary>

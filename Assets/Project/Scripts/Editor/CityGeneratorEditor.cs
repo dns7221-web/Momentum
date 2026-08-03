@@ -109,8 +109,21 @@ namespace Momentum.Level.EditorTools
             {
                 Row("건물 소스", s.HasPrefabs ? "실제 에셋 프리팹" : "회색 박스");
                 Row("앵커 간격", $"{s.PitchX:F1} × {s.PitchZ:F1} m", "바닥 크기 + 도로 폭");
+                Row("스윙 통로 폭", $"{s.SwingCorridorX:F1} × {s.SwingCorridorZ:F1} m",
+                    $"마주 보는 벽면 사이. 로프 {s.ropeLength:F0}m와 견줄 값이다");
                 Row("최고 건물 높이", $"{s.MaxHeight:F1} m",
-                    s.HasPrefabs ? "프리팹 실측값 — 설정으로 바꿀 수 없다" : null);
+                    s.HasPrefabs
+                        ? (s.MaxTiers > 1
+                            ? $"{s.MaxTiers}겹 적층 기준 — 한 겹은 에셋 실측값이다"
+                            : "프리팹 한 겹 실측값 — 적층으로만 늘릴 수 있다")
+                        : null);
+                if (s.HasPrefabs)
+                {
+                    Row("타워 겹 수", s.heightMode == HeightMode.Uniform
+                            ? $"{s.towerTiers} 겹"
+                            : $"{s.TowerTierRange.x} ~ {s.TowerTierRange.y} 겹",
+                        s.towerSetback ? "셋백 — 위로 갈수록 바닥이 좁아진다" : "같은 건물을 반복해 쌓는다");
+                }
                 int emptyCells = CountEmpty(s);
                 Row("건물 수", emptyCells > 0
                         ? $"{s.TotalBuildings - emptyCells} 채  (빈 칸 {emptyCells})"
@@ -186,21 +199,37 @@ namespace Momentum.Level.EditorTools
                     MessageType.Error);
             }
 
+            // 사거리 조건을 통과해도 통로가 좁으면 스윙이 성립하지 않는다.
+            // 앞으로 나아가는 것과 옆으로 흔들리는 것은 다른 축이고, 위 경고는 앞쪽만 본다.
+            float widestCorridor = Mathf.Max(s.SwingCorridorX, s.SwingCorridorZ);
+            if (widestCorridor < s.ropeLength * 0.6f)
+            {
+                clean = false;
+                EditorGUILayout.HelpBox(
+                    $"가장 넓은 통로가 {widestCorridor:F1}m인데 로프는 {s.ropeLength:F0}m다.\n" +
+                    "진자를 조금만 흔들어도 맞은편 벽에 닿는다. 앵커 간격이 사거리 안에 있어도 " +
+                    "이쪽이 좁으면 건물에 처박히며 날게 된다.\n" +
+                    $"한 축의 통로를 최소 {s.ropeLength * 0.6f:F0}m까지 넓힐 것 — 두 축을 다 넓힐 " +
+                    "필요는 없다. 넓은 축이 스윙 대로가 되고 좁은 축은 앵커 밀도를 담당한다.",
+                    MessageType.Warning);
+            }
+
             if (s.MaxHeight < b.MinHeight)
             {
                 clean = false;
 
                 if (s.HasPrefabs)
                 {
-                    // 프리팹을 쓰면 높이는 에셋이 정한 값이라 늘릴 수 없다.
-                    // 그래서 조언의 방향이 반대가 된다 — 건물을 높이는 게 아니라 로프를 줄이는 것.
+                    // 한 겹의 높이는 에셋이 정하지만 겹 수는 우리가 정한다.
+                    // 그래서 조언이 둘로 갈린다 — 겹을 올리거나, 로프를 줄이거나.
                     float maxRope = Mathf.Max(1f, s.MaxHeight - s.groundClearance);
                     float gravityForSameSpeed = Mathf.Max(1f,
                         s.gravityScale * (s.ropeLength / maxRope));
                     EditorGUILayout.HelpBox(
-                        $"에셋의 최고 건물이 {s.MaxHeight:F1}m인데 로프 {s.ropeLength:F0}m는 " +
+                        $"가장 높은 타워가 {s.MaxHeight:F1}m({s.MaxTiers}겹)인데 로프 {s.ropeLength:F0}m는 " +
                         $"{b.MinHeight:F1}m를 요구한다.\n" +
-                        $"건물 높이는 에셋이 정한 값이라 늘릴 수 없다. 로프를 {maxRope:F0}m 이하로 줄이고, " +
+                        $"겹 수를 올리는 것이 가장 싸다 — 로프 길이와 앵커 간격을 안 건드린다. " +
+                        $"높이를 그대로 두려면 로프를 {maxRope:F0}m 이하로 줄이고, " +
                         $"같은 속도를 유지하려면 중력 배율을 ×{gravityForSameSpeed:F1} 정도로 올릴 것.",
                         MessageType.Error);
                 }

@@ -219,7 +219,31 @@ namespace Momentum.Level.EditorTools
             instance.transform.localPosition =
                 new Vector3(-body.center.x, -bounds.min.y, -body.center.y);
 
-            float height = bounds.size.y;
+            // 메시 콜라이더를 먼저 붙인다 — 아래 높이 측정이 여기 대고 레이를 쏜다.
+            //
+            // 여기까지 오는 동안 높이를 두 번 다르게 계산해봤다(렌더러 단위 필터, 옥상
+            // 중심 정점 표본). 실측으로는 둘 다 여전히 어긋났고, 두 번째 시도는 다시 보니
+            // 이미 원점으로 옮겨둔 좌표에서 옮기기 <b>전</b> 값(bounds.min.y)을 한 번 더
+            // 빼는 산수 실수까지 있었다. "정점을 뒤져 지붕이 몇 미터인지 추정한다"는
+            // 접근 자체를 접는다 — 정답은 추정하지 않아도 물리로 바로 나온다.
+            AddMeshColliders(instance);
+
+            // 피벗 정렬 뒤 바운즈를 다시 잰다. MeasureRoofHeight에 넘기던 bodyCenter·
+            // full.max.y는 정렬 <b>전</b> 값이라 XZ가 어긋나 레이가 옥상 중심을 빗나갔고,
+            // 그게 BoxCollider가 메시보다 높게 잡히던 직접 원인이었다.
+            if (!TryMeasure(instance, out Bounds aligned))
+            {
+                report.AppendLine($"  {model.name} — 건너뜀 (정렬 후 렌더러 없음)");
+                Object.DestroyImmediate(root);
+                return null;
+            }
+
+            int probeMask = LayerMask.GetMask(CityGenerator.AnchorLayerName);
+            if (probeMask == 0) probeMask = ~0;
+
+            float height = RoofProbe.MeasureWalkableHeight(instance.transform, aligned, probeMask,
+                                                           aligned.size.y);
+            float capTrimmed = aligned.max.y - height;
             var box = root.AddComponent<BoxCollider>();
             box.center = new Vector3(0f, height * 0.5f, 0f);
             box.size = new Vector3(body.size.x, height, body.size.y);
@@ -239,14 +263,17 @@ namespace Momentum.Level.EditorTools
 
             float trimmedX = bounds.size.x - body.size.x;
             float trimmedZ = bounds.size.z - body.size.y;
-            string trimNote = Mathf.Max(trimmedX, trimmedZ) > 0.1f
+            string footprintNote = Mathf.Max(trimmedX, trimmedZ) > 0.1f
                 ? $"   전체 {bounds.size.x:F1}×{bounds.size.z:F1} → 계단 등 " +
                   $"{Mathf.Max(trimmedX, trimmedZ):F1}m 제외"
+                : string.Empty;
+            string heightNote = capTrimmed > 0.1f
+                ? $"   전체높이 {bounds.size.y:F2} → 옥상 돌출물 {capTrimmed:F2}m 제외"
                 : string.Empty;
 
             report.AppendLine(
                 $"  {model.name,-24} {body.size.x,5:F1} × {meta.height,5:F1} × {body.size.y,5:F1} m" +
-                $"   약 {meta.floorCount}층{trimNote}");
+                $"   약 {meta.floorCount}층{footprintNote}{heightNote}");
 
             return saved;
         }
@@ -327,6 +354,19 @@ namespace Momentum.Level.EditorTools
         {
             go.layer = layer;
             foreach (Transform child in go.transform) SetLayerRecursive(child.gameObject, layer);
+        }
+
+        /// <summary>
+        /// 렌더러가 있는 자식마다 그 메시 그대로 콜라이더를 붙인다.
+        /// 건물은 움직이지 않는 정적 지오메트리라 오목한 메시 콜라이더도 문제없다.
+        /// </summary>
+        private static void AddMeshColliders(GameObject go)
+        {
+            foreach (var filter in go.GetComponentsInChildren<MeshFilter>())
+            {
+                if (filter.sharedMesh == null) continue;
+                filter.gameObject.AddComponent<MeshCollider>().sharedMesh = filter.sharedMesh;
+            }
         }
     }
 }

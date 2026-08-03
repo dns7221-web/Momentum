@@ -114,7 +114,12 @@ namespace Momentum.Level
                     if (emptyMask[x, z]) continue;
 
                     int targetFloors = settings.FloorCountAt(x, z);
-                    var basePos = new Vector3(originX + x * settings.PitchX, 0f, originZ + z * settings.PitchZ);
+
+                    // 칸 정중앙이 아니라 조금 밀어 놓는다. 도로·광장·교차로는 격자 그대로
+                    // 깔리므로 건물만 흔들리고, 그래서 눈에 보이던 격자 선이 끊긴다.
+                    Vector2 jitter = settings.CellOffset(x, z);
+                    var basePos = new Vector3(originX + x * settings.PitchX + jitter.x, 0f,
+                                              originZ + z * settings.PitchZ + jitter.y);
 
                     var building = settings.HasPrefabs
                         ? CreatePrefabBuilding(x, z, targetFloors)
@@ -125,7 +130,8 @@ namespace Momentum.Level
                     building.transform.SetParent(root.transform, false);
                     building.transform.localPosition = basePos;
 
-                    // 프리팹은 이미 실측 치수가 담긴 CityBuilding을 들고 온다. 격자 좌표만 채운다.
+                    // 치수는 만드는 쪽에서 이미 채워져 있다 (타워는 겹 합계, 회색 박스는 층수).
+                    // 여기서는 격자 좌표만 채운다.
                     var meta = building.GetComponent<CityBuilding>();
                     if (meta == null) meta = building.AddComponent<CityBuilding>();
                     meta.gridX = x;
@@ -146,6 +152,7 @@ namespace Momentum.Level
             }
 
             int props = CreateRoofProps(root.transform, placed);
+            int rails = CreateRoofRails(root.transform, placed);
 
             // 도로와 광장을 먼저 깐다. 표면이 y=0보다 얼마나 파여 있는지를 재고 나서야
             // 지면을 그보다 아래에 둘 수 있기 때문이다.
@@ -158,15 +165,28 @@ namespace Momentum.Level
 
             if (settings.markStatic) MarkStaticRecursive(root);
 
+            // 실제로 선 높이를 보고한다. 설정값(MaxHeight)은 이론 상한이라, 셋백 조합에 따라
+            // 실제 최고 타워가 그보다 낮게 나올 수 있다 — 튜닝에 쓸 숫자는 이쪽이다.
+            float shortest = float.MaxValue, tallest = 0f;
+            foreach (var b in placed)
+            {
+                shortest = Mathf.Min(shortest, b.height);
+                tallest = Mathf.Max(tallest, b.height);
+            }
+            string heightNote = placed.Count == 0
+                ? $"최고 높이 {settings.MaxHeight:F0}m"
+                : $"건물 높이 {shortest:F0}~{tallest:F0}m";
+
             int emptyCells = settings.TotalBuildings - placed.Count;
             Debug.Log($"[CityGenerator] 건물 {placed.Count}채 생성" +
                       (emptyCells > 0 ? $" (빈 칸 {emptyCells}개)" : string.Empty) +
-                      $". 앵커 간격 {settings.PitchX:F1}m / 최고 높이 {settings.MaxHeight:F0}m" +
+                      $". 앵커 간격 {settings.PitchX:F1}m / {heightNote}" +
                       (roadTiles > 0 ? $" / 도로 타일 {roadTiles}장" : string.Empty) +
                       (crosswalks > 0 ? $" / 횡단보도 {crosswalks}개" : string.Empty) +
                       (plazaFloorTiles > 0 ? $" / 광장 바닥 {plazaFloorTiles}장" : string.Empty) +
                       (plazaProps > 0 ? $" / 광장 소품 {plazaProps}개" : string.Empty) +
                       (props > 0 ? $" / 옥상 소품 {props}개" : string.Empty) +
+                      (rails > 0 ? $" / 옥상 난간 {rails}개" : string.Empty) +
                       (settings.generateBoundaryWall
                           ? $" / 경계벽 {settings.BoundaryWallHeight:F0}m"
                           : string.Empty), this);
@@ -198,10 +218,12 @@ namespace Momentum.Level
             var root = new GameObject("_RoofProps");
             root.transform.SetParent(parent, false);
             int layer = LayerMask.NameToLayer(AnchorLayerName);
+            int anchorMask = layer >= 0 ? (1 << layer) : ~0;
 
             int lowCount = Mathf.Min(settings.roofPropCountMin, settings.roofPropCountMax);
             int highCount = Mathf.Max(settings.roofPropCountMin, settings.roofPropCountMax);
             int total = 0;
+            int missed = 0;
 
             foreach (var building in buildings)
             {
@@ -230,8 +252,11 @@ namespace Momentum.Level
                                             (float)(rng.NextDouble() * 2.0 - 1.0) * halfZ);
                     }
 
-                    Vector3 spot = building.transform.TransformPoint(
-                        new Vector3(local.x, building.height, local.y));
+                    if (!TryFindRoofSurface(building, local, anchorMask, out Vector3 spot))
+                    {
+                        missed++;
+                        continue;
+                    }
 
                     var prop = InstantiateLinked(spec.prefab);
                     prop.transform.SetParent(root.transform, false);
@@ -244,7 +269,124 @@ namespace Momentum.Level
                 }
             }
 
+            if (missed > 0)
+                Debug.LogWarning($"[CityGenerator] 옥상 소품 {missed}개는 표면을 못 찾아 건너뛰었다. " +
+                                  "RoofProbe.Margin이 부족하거나 건물에 콜라이더가 없을 수 있다.", this);
             return total;
+        }
+
+        /// <summary>
+        /// 계산한 높이 위에서 아래로 쏴 <b>실제 밟을 수 있는</b> 표면을 찾는다.
+        ///
+        /// <see cref="RoofProbe"/>와 같은 규칙을 쓴다. BoxCollider는 근사 박스라 제외하고,
+        /// 메시 히트 중 윗면(법선↑) 가운데 가장 낮은 점을 고른다 — 돌출물 꼭대기가 아니라
+        /// 옥상 바닥에 플레이어·난간·소품을 맞추기 위해서다.
+        /// </summary>
+        private bool TryFindRoofSurface(CityBuilding building, Vector2 local, int anchorMask, out Vector3 spot)
+        {
+            Vector3 origin = building.transform.TransformPoint(
+                new Vector3(local.x, building.height + RoofProbe.Margin, local.y));
+
+            return RoofProbe.TryFindWalkableSurface(
+                origin, RoofProbe.Margin * 2f, building.transform, anchorMask, out spot);
+        }
+
+        /// <summary>
+        /// 옥상 둘레를 난간으로 두른다.
+        ///
+        /// 옥상 소품과 별도 함수인 이유는 배치를 정하는 주체가 다르기 때문이다. 소품은
+        /// "몇 개를 흩을까"라서 개수가 설정값이지만, 난간은 <b>둘레를 채우는 것</b>이라
+        /// 개수가 옥상 크기에서 나온다 — 사람이 정할 값이 아니다. 방향도 마찬가지로
+        /// 무작위가 아니라 변을 따라야 한다.
+        ///
+        /// 스윙 고도에서 옥상은 면이 아니라 <b>윤곽선</b>으로 읽힌다. 그래서 실외기를
+        /// 안쪽에 아무리 흩어도 실루엣이 안 생기고, 가장자리를 한 줄 두르는 쪽이 크게 이긴다.
+        /// </summary>
+        private int CreateRoofRails(Transform parent, List<CityBuilding> buildings)
+        {
+            if (settings.roofRailPrefab == null || buildings.Count == 0) return 0;
+            if (!TryMeasurePrefab(settings.roofRailPrefab, parent, out Bounds rail)) return 0;
+
+            float pieceLength = Mathf.Max(rail.size.x, rail.size.z);
+            if (pieceLength < 0.1f) return 0;
+
+            // 조각의 긴 축이 어느 쪽인지에 따라 변에 맞추는 회전이 90° 달라진다.
+            bool longAlongX = rail.size.x >= rail.size.z;
+
+            var root = new GameObject("_RoofRails");
+            root.transform.SetParent(parent, false);
+            int layer = LayerMask.NameToLayer(AnchorLayerName);
+            int anchorMask = layer >= 0 ? (1 << layer) : ~0;
+            int total = 0;
+            int missed = 0;
+
+            foreach (var building in buildings)
+            {
+                float hx = building.footprint.x * 0.5f - settings.roofRailInset;
+                float hz = building.footprint.y * 0.5f - settings.roofRailInset;
+                if (hx <= 0f || hz <= 0f) continue;
+
+                var corners = new[]
+                {
+                    new Vector2(-hx, +hz), new Vector2(+hx, +hz),
+                    new Vector2(+hx, -hz), new Vector2(-hx, -hz),
+                };
+
+                for (int i = 0; i < 4; i++)
+                {
+                    total += PlaceRailRun(root.transform, building, rail, pieceLength, longAlongX,
+                                          layer, anchorMask, corners[i], corners[(i + 1) % 4], ref missed);
+                }
+            }
+
+            if (missed > 0)
+                Debug.LogWarning($"[CityGenerator] 옥상 난간 {missed}칸은 표면을 못 찾아 건너뛰었다.", this);
+            return total;
+        }
+
+        /// <summary>옥상 한 변을 난간 조각으로 채운다. 좌표는 건물 로컬 XZ.</summary>
+        private int PlaceRailRun(Transform parent, CityBuilding building, Bounds rail,
+                                 float pieceLength, bool longAlongX, int layer, int anchorMask,
+                                 Vector2 from, Vector2 to, ref int missed)
+        {
+            Vector2 span = to - from;
+            float run = span.magnitude;
+            if (run < 0.01f) return 0;
+
+            // 조각 길이로 나눠 몇 개인지 스스로 정하고, 남는 만큼은 간격을 늘려 메운다.
+            // 변 길이가 조각 길이의 배수가 아닌 것이 보통이라, 개수를 맞추는 대신
+            // 간격을 늘리는 쪽이 틈이 한 군데로 몰리지 않는다.
+            int count = Mathf.Max(1, Mathf.RoundToInt(run / pieceLength));
+            Vector2 step = span / count;
+
+            // +Z를 0°로 보는 각. 변 방향으로 조각의 앞을 돌린 뒤, 긴 축이 X면 90°를 더한다.
+            float edgeYaw = Mathf.Atan2(span.x, span.y) * Mathf.Rad2Deg;
+            float align = longAlongX ? 90f : 0f;
+            int placed = 0;
+
+            for (int i = 0; i < count; i++)
+            {
+                Vector2 local = from + step * (i + 0.5f);
+
+                if (!TryFindRoofSurface(building, local, anchorMask, out Vector3 spot))
+                {
+                    missed++;
+                    continue;
+                }
+
+                var piece = InstantiateLinked(settings.roofRailPrefab);
+                piece.transform.SetParent(parent, false);
+                piece.transform.rotation =
+                    building.transform.rotation * Quaternion.Euler(0f, edgeYaw + align, 0f);
+                // 조각 밑면을 옥상에 앉힌다. 피벗이 바닥이 아닌 것이 섞여 있어 실측으로 보정한다.
+                piece.transform.position = spot - Vector3.up * rail.min.y;
+
+                if (layer >= 0) SetLayerRecursive(piece, layer);
+                if (settings.propColliders) AddMeshColliders(piece);
+                placed++;
+            }
+
+            return placed;
         }
 
         /// <summary>
@@ -366,23 +508,28 @@ namespace Momentum.Level
 
             roadRecess = Mathf.Max(0f, -segment.min.y);
 
+            // 대로용 프리팹이 따로 있으면 그것으로 잰다. 없으면 같은 것을 쓴다 —
+            // 그때는 폭이 안 맞아 통로 양옆에 지면이 드러나고, 아래 경고가 그걸 알려준다.
+            var avenuePrefab = settings.avenueSegmentPrefab != null
+                ? settings.avenueSegmentPrefab
+                : settings.roadSegmentPrefab;
+            if (!TryMeasurePrefab(avenuePrefab, parent, out Bounds avenue)) avenue = segment;
+            roadRecess = Mathf.Max(roadRecess, -avenue.min.y);
+
             float segmentLength = Mathf.Min(segment.size.x, segment.size.z);
-            float crossSection = Mathf.Max(segment.size.x, segment.size.z);
+            float avenueLength = Mathf.Min(avenue.size.x, avenue.size.z);
             // 폭이 어느 축에 있는지에 따라 통로에 맞추는 회전이 달라진다.
             bool crossAlongZ = segment.size.z >= segment.size.x;
+            bool avenueCrossAlongZ = avenue.size.z >= avenue.size.x;
 
-            if (Mathf.Abs(crossSection - settings.streetWidth) > 0.1f)
-            {
-                Debug.LogWarning(
-                    $"[CityGenerator] 도로 타일 폭이 {crossSection:F2}m인데 설정 도로 폭은 " +
-                    $"{settings.streetWidth:F2}m다. 통로와 어긋나므로 streetWidth를 " +
-                    $"{crossSection:F2}로 맞추는 편이 낫다.", this);
-            }
+            WarnRoadWidth(segment, settings.streetWidthX, nameof(settings.streetWidthX),
+                          settings.roadSegmentPrefab);
+            WarnRoadWidth(avenue, settings.streetWidthZ, nameof(settings.streetWidthZ), avenuePrefab);
 
             int tilesAlongZ = Mathf.Max(1, Mathf.RoundToInt(settings.footprintZ / segmentLength));
-            int tilesAlongX = Mathf.Max(1, Mathf.RoundToInt(settings.footprintX / segmentLength));
+            int tilesAlongX = Mathf.Max(1, Mathf.RoundToInt(settings.footprintX / avenueLength));
             WarnIfNotDivisible(settings.footprintZ, segmentLength);
-            WarnIfNotDivisible(settings.footprintX, segmentLength);
+            WarnIfNotDivisible(settings.footprintX, avenueLength);
 
             var roads = new GameObject("_Roads");
             roads.transform.SetParent(parent, false);
@@ -415,9 +562,9 @@ namespace Momentum.Level
                     float cz = originZ + z * settings.PitchZ + settings.PitchZ * 0.5f;
                     for (int k = 0; k < tilesAlongX; k++)
                     {
-                        float tx = cx - settings.footprintX * 0.5f + segmentLength * (k + 0.5f);
-                        PlaceTile(settings.roadSegmentPrefab, segment, new Vector2(tx, cz),
-                                  crossAlongZ ? 0f : 90f, roads.transform, layer);
+                        float tx = cx - settings.footprintX * 0.5f + avenueLength * (k + 0.5f);
+                        PlaceTile(avenuePrefab, avenue, new Vector2(tx, cz),
+                                  avenueCrossAlongZ ? 0f : 90f, roads.transform, layer);
                         placed++;
                     }
                 }
@@ -426,6 +573,18 @@ namespace Momentum.Level
             placed += CreateIntersections(roads.transform, originX, originZ, layer, ref roadRecess);
             crosswalks = CreateCrosswalks(roads.transform, originX, originZ, layer);
             return placed;
+        }
+
+        /// <summary>도로 타일 폭이 그 통로의 설정 폭과 맞는지.</summary>
+        private void WarnRoadWidth(Bounds tile, float corridorWidth, string fieldName, GameObject prefab)
+        {
+            float crossSection = Mathf.Max(tile.size.x, tile.size.z);
+            if (Mathf.Abs(crossSection - corridorWidth) <= 0.1f) return;
+
+            Debug.LogWarning(
+                $"[CityGenerator] '{prefab.name}' 폭이 {crossSection:F2}m인데 {fieldName}는 " +
+                $"{corridorWidth:F2}m다. 통로와 어긋나므로 {fieldName}를 {crossSection:F2}로 " +
+                "맞추거나, 그 폭에 맞는 도로 프리팹을 쓸 것.", this);
         }
 
         /// <summary>
@@ -450,11 +609,12 @@ namespace Momentum.Level
             // 도로 폭보다 좁은 것은 정상이다 — 횡단보도는 차도만 칠하고 인도는 비워두는 게
             // 맞는 그림이고, 배치는 도로 중심선 기준이라 좁아도 차도 중앙에 그대로 앉는다.
             // 반대로 도로 폭보다 크면 인도나 건물 쪽으로 삐져나오므로 그 경우만 경고한다.
-            if (crossSection > settings.streetWidth + 0.1f)
+            float narrowest = Mathf.Min(settings.streetWidthX, settings.streetWidthZ);
+            if (crossSection > narrowest + 0.1f)
             {
                 Debug.LogWarning(
-                    $"[CityGenerator] 횡단보도 폭이 {crossSection:F2}m인데 도로 폭은 " +
-                    $"{settings.streetWidth:F2}m다. 도로보다 커서 인도 쪽으로 넘친다.", this);
+                    $"[CityGenerator] 횡단보도 폭이 {crossSection:F2}m인데 좁은 쪽 도로는 " +
+                    $"{narrowest:F2}m다. 그 도로에서는 인도 쪽으로 넘친다.", this);
             }
 
             // 교차로 사각형 바깥에 붙인다. 안쪽에 넣으면 네 장이 고리처럼 이어지면서 모서리마다
@@ -462,7 +622,10 @@ namespace Momentum.Level
             // 도로 폭 ≥ 가로지르는 길이 + 두께 × 2 여야 하고, 이 키트는 5.4 + 4.5×2 = 14.5m라
             // 12m 도로에 애초에 자리가 없다. 밖으로 빼면 남북 한 쌍과 동서 한 쌍이 아예
             // 다른 통로에 놓이므로 폭과 무관하게 안 겹친다.
-            float half = settings.streetWidth * 0.5f + thickness * 0.5f;
+            // 축마다 빠져나가는 폭이 다르다. 남·북으로 뺄 때는 교차로의 Z 변을,
+            // 서·동으로 뺄 때는 X 변을 넘어야 한다.
+            float halfZ = settings.streetWidthZ * 0.5f + thickness * 0.5f;
+            float halfX = settings.streetWidthX * 0.5f + thickness * 0.5f;
 
             // 밖으로 뺀 대신, 이번엔 이웃 교차로에서 마주 보고 오는 장과 통로 한가운데서
             // 만날 수 있다. 통로 길이는 블록 한 변이므로 두께 두 장이 거기 들어가야 한다.
@@ -482,12 +645,12 @@ namespace Momentum.Level
                     float cx = originX + x * settings.PitchX + settings.PitchX * 0.5f;
                     float cz = originZ + z * settings.PitchZ + settings.PitchZ * 0.5f;
 
-                    // 애비뉴 진입부 — 남 · 북
-                    PlaceAtIntersection(new Vector2(cx, cz - half), crossAlongZ ? 90f : 0f);
-                    PlaceAtIntersection(new Vector2(cx, cz + half), crossAlongZ ? 90f : 0f);
-                    // 스트리트 진입부 — 서 · 동
-                    PlaceAtIntersection(new Vector2(cx - half, cz), crossAlongZ ? 0f : 90f);
-                    PlaceAtIntersection(new Vector2(cx + half, cz), crossAlongZ ? 0f : 90f);
+                    // 이면도로(Z 방향) 진입부 — 남 · 북
+                    PlaceAtIntersection(new Vector2(cx, cz - halfZ), crossAlongZ ? 90f : 0f);
+                    PlaceAtIntersection(new Vector2(cx, cz + halfZ), crossAlongZ ? 90f : 0f);
+                    // 대로(X 방향) 진입부 — 서 · 동
+                    PlaceAtIntersection(new Vector2(cx - halfX, cz), crossAlongZ ? 0f : 90f);
+                    PlaceAtIntersection(new Vector2(cx + halfX, cz), crossAlongZ ? 0f : 90f);
                     placed += 4;
                 }
             }
@@ -512,10 +675,11 @@ namespace Momentum.Level
             if (!TryMeasurePrefab(settings.intersectionPrefab, parent, out Bounds cross)) return 0;
 
             float tileSize = Mathf.Max(cross.size.x, cross.size.z);
-            if (tileSize > settings.streetWidth + 0.1f)
+            float narrowest = Mathf.Min(settings.streetWidthX, settings.streetWidthZ);
+            if (tileSize > narrowest + 0.1f)
             {
                 Debug.LogWarning(
-                    $"[CityGenerator] 교차로 타일이 {tileSize:F2}m인데 통로는 {settings.streetWidth:F2}m다. " +
+                    $"[CityGenerator] 교차로 타일이 {tileSize:F2}m인데 좁은 쪽 통로는 {narrowest:F2}m다. " +
                     "통로보다 커서 깔지 않는다. 더 작은 타일(예: Street_Asphalt_6x6)을 쓸 것.", this);
                 return 0;
             }
@@ -529,8 +693,10 @@ namespace Momentum.Level
                 {
                     float cx = originX + x * settings.PitchX + settings.PitchX * 0.5f;
                     float cz = originZ + z * settings.PitchZ + settings.PitchZ * 0.5f;
+                    // 두 통로의 폭이 다르므로 교차로 자리도 정사각형이 아니다.
+                    // TileArea는 원래부터 축마다 다른 길이를 받으므로 값만 나눠 넘기면 된다.
                     placed += TileArea(settings.intersectionPrefab, cross, new Vector2(cx, cz),
-                                       settings.streetWidth, settings.streetWidth, parent, layer);
+                                       settings.streetWidthX, settings.streetWidthZ, parent, layer);
                 }
             }
             return placed;
@@ -806,24 +972,132 @@ namespace Momentum.Level
         }
 
         /// <summary>
-        /// 실제 건물 프리팹 한 채.
+        /// 실제 건물 프리팹으로 세운 타워 한 채.
         ///
         /// 프리팹 링크를 유지해서 인스턴스화한다. 36채를 놓은 뒤 프리팹 하나를 고치면
         /// 전부 따라오게 하려는 것이다. 링크가 없으면 콜라이더 하나 수정에 36번을 손대야 한다.
+        ///
+        /// <b>여러 겹을 쌓아도 역산 사슬은 한 글자도 안 바뀐다.</b> 높이 조건(<c>H ≥ 로프 + 여유</c>)과
+        /// 간격 조건(<c>피치 ≤ 2·L·sinθ</c>)은 서로 독립이라, 겹을 올리면 두 번째 식을 건드리지 않고
+        /// 첫 번째 식의 여유만 커진다. 로프 22m·간격 36m를 그대로 두고 아치의 고도만 올리는 것이
+        /// 이 함수가 하는 일의 전부다.
         /// </summary>
         private GameObject CreatePrefabBuilding(int x, int z, int targetFloors)
         {
-            var prefab = settings.PickPrefab(x, z, targetFloors);
-            if (prefab == null) return null;
+            int tiers = settings.TowerTiersAt(x, z);
 
-            if (CityLayoutSettings.MetaOf(prefab) == null)
+            // 겹을 담을 빈 루트를 따로 둔다. 맨 아래 겹을 루트로 쓰면 그 겹의 실측값
+            // (28m·9층)이 타워 전체의 값 행세를 하게 되고, 앵커와 옥상 소품이 중간 높이에 걸린다.
+            var tower = new GameObject("Tower");
+            var meta = tower.AddComponent<CityBuilding>();
+
+            float cursor = 0f;
+            int floors = 0;
+            var topFootprint = Vector2.zero;
+            int stacked = 0;
+            GameObject topInstance = null;
+
+            for (int tier = 0; tier < tiers; tier++)
             {
-                Debug.LogError($"[CityGenerator] '{prefab.name}'에 CityBuilding이 없다. " +
-                               "실측 치수를 모르므로 배치할 수 없다. BuildingPrefabTool로 다시 만들 것.", prefab);
+                var prefab = settings.TierPrefab(x, z, tier, targetFloors);
+                if (prefab == null) break;
+
+                var tierMeta = CityLayoutSettings.MetaOf(prefab);
+                if (tierMeta == null)
+                {
+                    Debug.LogError($"[CityGenerator] '{prefab.name}'에 CityBuilding이 없다. " +
+                                   "실측 치수를 모르므로 배치할 수 없다. BuildingPrefabTool로 다시 만들 것.", prefab);
+                    break;
+                }
+
+                var instance = InstantiateLinked(prefab);
+                instance.name = $"Tier{tier}_{prefab.name}";
+                instance.transform.SetParent(tower.transform, false);
+
+                int steps = settings.TierRotationSteps(x, z, tier);
+                instance.transform.localRotation = Quaternion.Euler(0f, steps * 90f, 0f);
+
+                // 실측 높이가 렌더러 바운즈 전체라 옥상 구조물까지 포함된 값이다.
+                // 그래서 바로 이어 붙이면 위 겹이 아래 겹의 가장 높은 점 위에 앉는다.
+                instance.transform.localPosition = new Vector3(0f, cursor, 0f);
+
+                // 겹이 들고 온 CityBuilding을 떼어낸다. 남겨두면 도시를 GetComponentsInChildren로
+                // 훑는 쪽(기즈모)이 한 채를 여러 채로 세고, 무엇보다 앵커가 맞은 콜라이더에서
+                // GetComponentInParent로 건물을 찾는 순간 타워가 아니라 그 겹이 잡힌다.
+                StripComponent(instance.GetComponent<CityBuilding>());
+
+                cursor += tierMeta.height;
+                floors += tierMeta.floorCount;
+
+                // 옥상은 맨 위 겹의 것이다. 90°·270°로 돌아간 겹은 바닥의 두 축이 바뀌므로
+                // 타워 로컬 기준으로 되돌려 기록한다 — 안 그러면 소품이 옥상 밖으로 떨어진다.
+                topFootprint = steps % 2 == 0
+                    ? tierMeta.footprint
+                    : new Vector2(tierMeta.footprint.y, tierMeta.footprint.x);
+                stacked++;
+                topInstance = instance;
+            }
+
+            if (stacked == 0)
+            {
+                DestroyObject(tower);
                 return null;
             }
 
-            return InstantiateLinked(prefab);
+            meta.height = cursor;
+            meta.floorCount = floors;
+            meta.footprint = topFootprint;
+            meta.isShell = true;
+
+            // 겹마다 따로(혼자 놓인 채로) 잰 높이를 그냥 더하기만 했다. 각 겹의 측정 자체는
+            // 정확해도, 여러 겹을 쌓았을 때 맨 위 실제로 밟히는 표면이 그 합과 같다는
+            // 보장은 없다 — 특히 맨 위 겹의 BoxCollider는 그 겹 <b>혼자</b> 있다고 가정하고
+            // 구운 값이라, 플레이어가 실제로 서는 물리 표면과 어긋날 수 있다. 여기서
+            // 조립이 끝난 실물에 대고 다시 재서 바로잡는다 — 추정을 쌓지 않고 마지막에
+            // 한 번 실측으로 확정한다.
+            if (tiers > 1 && topInstance != null)
+            {
+                int probeMask = LayerMask.GetMask(AnchorLayerName);
+                if (probeMask == 0) probeMask = ~0;
+
+                // 겹수가 많을수록 겹마다 붙는 작은 오차도 더 쌓일 수 있으므로 마진을
+                // 겹수에 비례해 넉넉히 둔다.
+                float verifyMargin = RoofProbe.Margin * (1 + tiers);
+                Vector3 origin = tower.transform.TransformPoint(new Vector3(0f, cursor + verifyMargin, 0f));
+
+                if (RoofProbe.TryFindWalkableSurface(origin, verifyMargin * 2f, tower.transform,
+                                                     probeMask, out Vector3 verified))
+                {
+                    float verifiedHeight = verified.y; // 타워가 원점 기준이라 로컬 y = 월드 y
+                    var topBox = topInstance.GetComponent<BoxCollider>();
+
+                    if (topBox != null && Mathf.Abs(verifiedHeight - cursor) > 0.05f)
+                    {
+                        // 박스는 "그 겹의 로컬 바닥(0)부터 자기 높이만큼"으로 구워져 있었다.
+                        // 검증된 높이는 타워 전체 기준이므로, 그 겹의 로컬 바닥
+                        // (= cursor - 그 겹 원래 높이)을 빼서 그 겹 로컬 좌표로 되돌린다.
+                        float tierFloor = cursor - topBox.size.y;
+                        float tierLocalHeight = Mathf.Max(0.1f, verifiedHeight - tierFloor);
+                        topBox.size = new Vector3(topBox.size.x, tierLocalHeight, topBox.size.z);
+                        topBox.center = new Vector3(topBox.center.x, tierLocalHeight * 0.5f, topBox.center.z);
+                    }
+
+                    meta.height = verifiedHeight;
+                }
+            }
+
+            return tower;
+        }
+
+        /// <summary>
+        /// 프리팹 인스턴스에서 컴포넌트 하나를 떼어낸다.
+        /// 에디터에서는 프리팹 오버라이드로 기록되므로 원본 프리팹은 그대로다.
+        /// </summary>
+        private static void StripComponent(Component component)
+        {
+            if (component == null) return;
+            if (Application.isPlaying) Destroy(component);
+            else DestroyImmediate(component);
         }
 
         private GameObject CreateGreyboxBuilding(int floors)

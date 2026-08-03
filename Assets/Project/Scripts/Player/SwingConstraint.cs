@@ -59,6 +59,18 @@ namespace Momentum.Player
                  "속도에 비례할 이유가 없는 지점에서 잘라준다. 중력 9.81에서 12면 상승 7.3m · 체공 2.4초.")]
         [Min(0f)][SerializeField] private float maxReleaseUpSpeed = 12f;
 
+        [Header("충돌 시 자동 릴리즈")]
+        [Tooltip("건물에 정면으로 박으면 줄을 자동으로 놓는다. 끄면 벽에 붙은 채 구속이 계속 " +
+                 "당겨 긁히며 끌려간다.")]
+        [SerializeField] private bool releaseOnImpact = true;
+
+        [Tooltip("면에 <b>수직으로</b> 파고드는 속도가 이 값을 넘으면 놓는다(m/s).\n\n" +
+                 "속력 전체가 아니라 접촉 법선 성분을 재는 것이 요점이다. 벽을 비스듬히 " +
+                 "스치는 것과 정면으로 박는 것을 가르는 값이 그것이기 때문이다 — 17m/s로 " +
+                 "10° 각도로 스치면 법선 성분은 3m/s뿐이고, 같은 속도로 정면으로 박으면 17이다. " +
+                 "스치는 것까지 끊으면 건물 옆을 지나갈 때마다 줄이 풀려 스윙이 이어지지 않는다.")]
+        [Min(0f)][SerializeField] private float impactReleaseSpeed = 8f;
+
         [Header("감기 (InputSystem_Actions ▸ Player ▸ Reel)")]
         [SerializeField] private InputActionReference reelAction = null;
         [Tooltip("휠 한 칸에 목표 길이가 몇 m 바뀌는가. 실제 길이는 아래 속도로 그 목표를 따라간다.")]
@@ -70,10 +82,13 @@ namespace Momentum.Player
         [Tooltip("Swing 레이어 가중치가 오르내리는 속도(초당). 0이면 즉시 전환된다 — " +
                  "붙는 순간 자세가 뚝 끊겨서 대개 부자연스럽다.")]
         [Min(0f)][SerializeField] private float animLayerLerpSpeed = 8f;
-        [Tooltip("이 높이(월드 Y, 지면 위 미터와 거의 같다)를 넘으면 스윙 자세 대신 " +
-                 "닌자 점프 공중 자세를 보여준다. 큰 감기 증폭이나 강한 펌프로 정상 아치 " +
-                 "범위(최고 건물 28m 안팎)를 넘어 튀어 올랐을 때를 잡아내는 값이다.")]
-        [SerializeField] private float highFlightHeight = 30f;
+        [Tooltip("앵커보다 이만큼 위로 올라가면 스윙 자세 대신 닌자 점프 공중 자세를 " +
+                 "보여준다. 큰 감기 증폭이나 강한 펌프로 정상 아치를 넘어 튀어 올랐을 때를 " +
+                 "잡아내는 값이다.\n\n" +
+                 "기준이 월드 Y가 아니라 앵커인 이유는 도시 높이에 딸려가지 않게 하려는 것이다. " +
+                 "매달려 있는 동안 몸은 정의상 앵커보다 아래에 있으므로, 그 위로 올라갔다는 " +
+                 "사실 자체가 곧 '정상 아치를 벗어났다'는 뜻이다.")]
+        [SerializeField] private float highFlightAboveAnchor = 2f;
 
         [Header("스윙 자세 — 몸을 로프에 맞춰 기울인다")]
         [Tooltip("기울일 대상. 비워두면 Animator가 붙은 트랜스폼을 쓴다 — 그게 곧 캐릭터 " +
@@ -130,10 +145,20 @@ namespace Momentum.Player
         // 쪽이라, 다른 스크립트를 거쳐 전달하면 한 프레임 지연이나 값 어긋남이 생길 자리가
         // 하나 늘어날 뿐이다.
 
+        /// <summary>
+        /// 구속 보정이 벽에 멈출 때 남겨두는 여유. 정확히 표면에 붙여두면 다음 스텝에
+        /// 겹침 판정과 되밀기가 번갈아 일어나 떨린다.
+        /// </summary>
+        private const float ContactSkin = 0.02f;
+
         private Animator _animator;
         private const string SwingLayerName = "Swing";
         private static readonly int ReelingHash = Animator.StringToHash("Reeling");
         private static readonly int HighFlightHash = Animator.StringToHash("HighFlight");
+        private static readonly int SwingStartedHash = Animator.StringToHash("SwingStarted");
+        private static readonly int SwingEndedHash = Animator.StringToHash("SwingEnded");
+        /// <summary>기본 레이어용. 트리거는 한 전이가 먹으면 소비되므로 레이어마다 따로 둔다.</summary>
+        private static readonly int SwingReleasedHash = Animator.StringToHash("SwingReleased");
 
         /// <summary>Swing 레이어의 인덱스. 레이어는 이름이 아니라 인덱스로 제어하는 API라 미리 찾아둔다.</summary>
         private int _swingLayerIndex = -1;
@@ -252,9 +277,15 @@ namespace Momentum.Player
             bool reeling = _swinging && RopeLength - _targetLength > 0.01f;
             _animator.SetBool(ReelingHash, reeling);
 
-            // 이 도시는 지면이 거의 월드 Y=0에 붙어 있어(도시 생성기가 그렇게 만든다),
-            // 레이캐스트로 지면을 다시 찾을 필요 없이 위치의 Y값 자체가 곧 지면 위 높이다.
-            bool highFlight = _swinging && _rb.position.y >= highFlightHeight;
+            // 원래는 월드 Y가 30m를 넘는지로 봤다. 지면이 y=0에 붙어 있으니 그게 곧 지상 높이라는
+            // 근거였는데, 그 30이라는 값은 사실 "최고 건물 28m 바로 위"라는 뜻이었다.
+            // 건물을 겹으로 쌓아 옥상이 70m가 되는 순간 그 전제가 깨진다 — 정상 스윙이 내내
+            // 문턱 위에 있어 공중 자세가 상시로 나온다.
+            //
+            // 기준을 앵커로 옮기면 도시 높이가 얼마든 성립한다. 로프에 매달린 몸은 정의상
+            // 앵커보다 아래에 있으므로, 그 위로 올라갔다는 것 자체가 아치를 벗어났다는 뜻이다.
+            bool highFlight = _swinging && gun != null &&
+                              _rb.position.y >= gun.AnchorPoint.y + highFlightAboveAnchor;
             _animator.SetBool(HighFlightHash, highFlight);
         }
 
@@ -406,6 +437,40 @@ namespace Momentum.Player
         }
 
         /// <summary>
+        /// 건물에 정면으로 박으면 줄을 놓는다.
+        ///
+        /// 이것이 없으면 벽에 닿은 뒤에도 구속이 계속 앵커 쪽으로 당겨, 벽이 밀어내는 힘과
+        /// 번갈아 싸우며 긁혀 끌려간다. 로프가 감당할 수 있는 것은 <b>당기는 힘</b>뿐이고
+        /// 앞을 막은 벽은 로프가 풀 수 있는 문제가 아니다 — 그러면 놓는 것이 맞다.
+        ///
+        /// <b>속력이 아니라 접촉 법선 성분을 잰다.</b> 스윙은 건물 옆을 스치며 지나가는 것이
+        /// 정상이라, 닿기만 하면 끊는 규칙은 도시를 지나갈 수 없게 만든다. 법선 성분은
+        /// 스칠 때 거의 0이고 정면으로 박을 때만 속력 전체가 실리므로, 그 둘을 값 하나로
+        /// 가른다. 부호는 <c>Abs</c>로 지운다 — 재려는 것은 방향이 아니라 파고드는 세기다.
+        ///
+        /// <c>EndSwing(false)</c>인 것은 의도적이다. <b>박은 것은 놓은 것이 아니므로 상향
+        /// 보상을 주지 않는다.</b> 벽에 부딪힐 때마다 위로 쏘아 올려주면 그게 곧 등반 기술이 된다.
+        /// 여기서 먼저 스윙을 끄므로 다음 <c>FixedUpdate</c>는 두 번 끄지 않는다.
+        /// </summary>
+        private void OnCollisionEnter(Collision collision)
+        {
+            if (!_swinging || !releaseOnImpact || gun == null) return;
+
+            float impact = 0f;
+            for (int i = 0; i < collision.contactCount; i++)
+            {
+                float normalSpeed = Mathf.Abs(
+                    Vector3.Dot(collision.relativeVelocity, collision.GetContact(i).normal));
+                if (normalSpeed > impact) impact = normalSpeed;
+            }
+
+            if (impact < impactReleaseSpeed) return;
+
+            EndSwing(false);
+            gun.ForceDetach();
+        }
+
+        /// <summary>
         /// 붙는 순간 로프 길이를 확정한다.
         ///
         /// 고정값을 쓰면 안 된다. 22m로 박아두고 15m 떨어진 곳에 붙으면 줄이 늘어져 아무 일도
@@ -431,6 +496,11 @@ namespace Momentum.Player
             // 지상 이동이 수평 속도를 덮어쓰지 못하게 막는다. 이걸 안 하면 진자가 만든
             // 접선 속도가 다음 스텝에 입력값으로 대체되어 스윙이 그 자리에서 죽는다.
             if (_movement != null) _movement.SuspendHorizontalControl = true;
+
+            // 붙는 순간을 명시적으로 알린다. Swing 레이어의 상태 기계는 가중치 0일 때도
+            // 계속 돌고 있어서, 매번 SwingLoop부터 다시 시작한다는 보장이 없다 — 트리거로
+            // "지금 막 붙었다"를 알려야 StartSwing 클립(있다면)이 확실히 재생된다.
+            _animator?.SetTrigger(SwingStartedHash);
         }
 
         /// <summary>
@@ -479,6 +549,12 @@ namespace Momentum.Player
             _swinging = false;
             RopeLength = 0f;
             if (_movement != null) _movement.SuspendHorizontalControl = false;
+
+            // 놓는 순간을 명시적으로 알린다 — boost 여부(컴포넌트가 꺼져서 정리되는 경우
+            // 등)와 무관하게, 스윙이 끝났다는 사실 자체는 항상 알려야 SwingLand 클립이
+            // (있다면) 놓친 적 없이 재생된다.
+            _animator?.SetTrigger(SwingEndedHash);    // 스윙 레이어 — SwingLand
+            _animator?.SetTrigger(SwingReleasedHash); // 기본 레이어 — AirIdle
 
             if (!boost || releaseUpFraction <= 0f) return;
 
@@ -614,8 +690,22 @@ namespace Momentum.Player
 
             Vector3 direction = toAnchor / distance;   // 플레이어 → 앵커
 
-            // 1. 위치 — 원 밖으로 나간 만큼 되당겨 정확히 로프 길이에 올려놓는다.
-            _rb.position += direction * (distance - RopeLength);
+            // 1. 위치 — 원 밖으로 나간 만큼 되당겨 로프 길이에 올려놓는다.
+            //
+            // <b>그냥 position에 대입하면 충돌을 건너뛰는 순간이동이다.</b> 그리고 이 보정은
+            // 방향이 언제나 앵커 쪽인데 앵커는 건물 위에 있으므로, 매 물리 스텝마다 캡슐을
+            // 건물 안으로 조금씩 밀어넣는 것과 같다. 밀려 들어간 캡슐을 PhysX가 밀어내면
+            // 다음 스텝에 로프가 다시 당기고, 그 왕복이 곧 벽에 박혀 긁히며 지나가는 증상이다.
+            // Continuous Dynamic으로도 안 잡히는 이유가 이것이다 — 터널링이 아니라 대입이다.
+            //
+            // 캡슐을 실제로 쓸어보고 막히는 지점에서 멈춘다. 벽에 막히면 로프가 길이를 넘긴
+            // 채로 남지만 그게 맞다 — 실제로도 벽이 가로막으면 줄은 팽팽해지고 몸은 안 간다.
+            // 아래 속도 보정은 그대로 도므로 접선 속도는 계속 유지된다.
+            float pull = distance - RopeLength;
+            if (_rb.SweepTest(direction, out RaycastHit blocked, pull, QueryTriggerInteraction.Ignore))
+                pull = Mathf.Max(0f, blocked.distance - ContactSkin);
+
+            if (pull > 0f) _rb.position += direction * pull;
 
             // 2. 속도 — 앵커에서 멀어지는 성분만 지운다.
             //

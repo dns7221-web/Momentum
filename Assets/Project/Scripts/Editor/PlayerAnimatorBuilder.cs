@@ -14,6 +14,18 @@ namespace Momentum.Player.EditorTools
     /// </summary>
     public static class PlayerAnimatorBuilder
     {
+        /// <summary>
+        /// AirIdle이 걸리려면 이만큼 연속으로 공중이어야 한다.
+        ///
+        /// 처음엔 0.08초로 뒀는데 실측에서 여전히 턱에서 튀었다 — Falling 문턱(0.15초)조차
+        /// "완만한 언덕을 속도 붙여 넘을 때도 넘길 수 있다"고 README에 이미 적혀 있는데,
+        /// 그보다 더 짧은 값을 썼으니 당연한 결과였다. Falling은 그 구멍을 <b>시간과 속도
+        /// 둘 다</b>로 막지만, AirIdle은 상승 구간(놓은 직후·점프 정점)도 잡아야 해서 속도로는
+        /// 못 거른다 — 그래서 시간 하나로 버티려면 확실히 크게 잡아야 한다. Falling 문턱보다
+        /// 넉넉히 위로 둔다.
+        /// </summary>
+        private const float AirIdleAirTimeThreshold = 0.25f;
+
         private const string OutputFolder = "Assets/Project/Player";
         private const string MenuPath = "Momentum/선택한 애니메이션 세트로 Animator Controller 만들기";
 
@@ -43,6 +55,12 @@ namespace Momentum.Player.EditorTools
             controller.AddParameter("Grounded", AnimatorControllerParameterType.Bool);
             controller.AddParameter("Jump", AnimatorControllerParameterType.Trigger);
             controller.AddParameter("Falling", AnimatorControllerParameterType.Bool);
+            controller.AddParameter("AirTime", AnimatorControllerParameterType.Float);
+            // 기본 레이어 전용 릴리즈 신호. 스윙 레이어의 SwingEnded와 <b>일부러 이름을
+            // 다르게</b> 둔다 — 유니티 트리거는 그것을 쓰는 전이가 하나 발동하면 즉시
+            // 소비(reset)되므로, 두 레이어가 같은 트리거를 보면 한쪽만 먹고 다른 쪽은
+            // 영영 못 받는다. 레이어마다 자기 트리거를 갖게 해야 둘 다 확실히 걸린다.
+            controller.AddParameter("SwingReleased", AnimatorControllerParameterType.Trigger);
 
             var rootLayer = controller.layers[0].stateMachine;
 
@@ -84,6 +102,9 @@ namespace Momentum.Player.EditorTools
                 BuildSwingLayer(controller, set);
             else
                 Debug.LogWarning("[PlayerAnimatorBuilder] swingLoop 클립이 비어 있어 스윙 레이어 없이 만들었다.");
+
+            if (set.grappleFire != null)
+                BuildGrappleFireLayer(controller, set);
 
             EditorUtility.SetDirty(controller);
             AssetDatabase.SaveAssets();
@@ -173,15 +194,11 @@ namespace Momentum.Player.EditorTools
             }
             AnimatorState afterDive = airState != null ? airState : afterAir;
 
+            AnimatorState diveState = null;
             if (set.diveStart != null)
             {
-                var diveState = layer.AddState("DiveStart");
+                diveState = layer.AddState("DiveStart");
                 diveState.motion = set.diveStart;
-
-                var enter = locomotion.AddTransition(diveState);
-                enter.hasExitTime = false;
-                enter.duration = 0.1f;
-                enter.AddCondition(AnimatorConditionMode.If, 0f, "Falling");
 
                 if (airState != null)
                 {
@@ -191,9 +208,65 @@ namespace Momentum.Player.EditorTools
                     toAir.duration = 0.1f;
                 }
             }
+            // "진짜 낙하로 확정됐을 때" 들어갈 곳. DiveStart가 있으면 거기, 없으면
+            // 곧장 공중 루프/착지 단계로 — 위 afterDive와 같은 폴백 규칙이다.
+            AnimatorState afterEnter = diveState != null ? diveState : afterDive;
+
+            if (set.airIdle != null)
+            {
+                // Locomotion과 "진짜 낙하 확정" 사이의 빈 구간을 메운다. 스윙을 놓은 직후나
+                // 점프 정점처럼 "공중이지만 아직 낙하는 아닌" 순간에 기본 Idle/Walk/Run
+                // 대신 이 자세가 보인다.
+                //
+                // 조건은 raw !Grounded가 아니라 <c>AirTime > 문턱</c>이다. 처음엔 !Grounded로
+                // 만들었는데, 그러면 인도 턱 같은 단차를 지나갈 때 물리 스텝 한 번만큼
+                // 접지가 순간적으로 끊기는 것까지 그대로 잡아버려 걷다가 AirIdle이 튀었다 —
+                // 정확히 Falling이 시간+속도 문턱으로 이미 한 번 피해간 그 문제다. AirTime은
+                // PlayerMovement가 연속 공중 시간을 누적해 매 프레임 보내는 값이라, 한 스텝짜리
+                // blip은 이 문턱을 못 넘는다.
+                var airIdleState = layer.AddState("AirIdle");
+                airIdleState.motion = set.airIdle;
+
+                var enterAirIdle = locomotion.AddTransition(airIdleState);
+                enterAirIdle.hasExitTime = false;
+                enterAirIdle.duration = 0.1f;
+                enterAirIdle.AddCondition(AnimatorConditionMode.Greater, AirIdleAirTimeThreshold, "AirTime");
+
+                // 진짜 낙하로 확정되면 다이빙/공중 루프 쪽으로 넘긴다.
+                var toRealFall = airIdleState.AddTransition(afterEnter);
+                toRealFall.hasExitTime = false;
+                toRealFall.duration = 0.15f;
+                toRealFall.AddCondition(AnimatorConditionMode.If, 0f, "Falling");
+
+                // 낙하로 안 이어지고 그새 다시 땅에 닿으면(턱을 살짝 넘은 정도) 곧장
+                // 이동으로 돌아간다 — Land까지 갈 정도로 크게 뜬 게 아니었으므로.
+                var quickLand = airIdleState.AddTransition(locomotion);
+                quickLand.hasExitTime = false;
+                quickLand.duration = 0.15f;
+                quickLand.AddCondition(AnimatorConditionMode.If, 0f, "Grounded");
+
+                // 스윙을 놓는 순간을 Any State에서 강제로 잡는다. 스윙 중에도 이 레이어의
+                // 상태 기계는 (안 보일 뿐) Grounded/Falling을 그대로 따라 계속 돌고 있어서,
+                // 놓는 시점에 Locomotion에 있다는 보장이 없다 — 오래 매달려 있었으면 이미
+                // AirLoop나 Land로 넘어가 있을 수 있고, 그러면 위 "Locomotion에서만 전이"
+                // 규칙이 걸릴 기회 자체가 없다. Any State는 현재 상태와 무관하게 항상
+                // 검사되므로, 어디에 가 있었든 놓는 순간 확실히 AirIdle로 되돌린다.
+                var forceAirIdle = layer.AddAnyStateTransition(airIdleState);
+                forceAirIdle.hasExitTime = false;
+                forceAirIdle.duration = 0.1f;
+                forceAirIdle.canTransitionToSelf = false;
+                forceAirIdle.AddCondition(AnimatorConditionMode.If, 0f, "SwingReleased");
+            }
+            else if (diveState != null)
+            {
+                var enter = locomotion.AddTransition(diveState);
+                enter.hasExitTime = false;
+                enter.duration = 0.1f;
+                enter.AddCondition(AnimatorConditionMode.If, 0f, "Falling");
+            }
             else
             {
-                // 다이빙 시작 클립이 없으면 곧장 공중/착지 단계로 들어간다.
+                // 다이빙 시작 클립도 없으면 곧장 공중/착지 단계로 들어간다.
                 var enter = locomotion.AddTransition(afterDive);
                 enter.hasExitTime = false;
                 enter.duration = 0.1f;
@@ -221,6 +294,8 @@ namespace Momentum.Player.EditorTools
         {
             controller.AddParameter("Reeling", AnimatorControllerParameterType.Bool);
             controller.AddParameter("HighFlight", AnimatorControllerParameterType.Bool);
+            controller.AddParameter("SwingStarted", AnimatorControllerParameterType.Trigger);
+            controller.AddParameter("SwingEnded", AnimatorControllerParameterType.Trigger);
 
             controller.AddLayer("Swing");
             var swingLayer = controller.layers[controller.layers.Length - 1];
@@ -232,6 +307,46 @@ namespace Momentum.Player.EditorTools
             var swingState = stateMachine.AddState("SwingLoop");
             swingState.motion = set.swingLoop;
             stateMachine.defaultState = swingState;
+
+            // 붙는 순간·놓는 순간 한 번씩 재생되는 전환 클립. Any State에서 트리거로 들어오는
+            // 이유는 이 레이어의 가중치가 코드로 0↔1을 오가는 것과 별개로, 상태 기계 자체는
+            // 가중치 0일 때도 계속 돌고 있어서다 — 매번 SwingLoop부터 다시 시작한다는 보장이
+            // 없으므로, "지금 막 붙었다/놓았다"는 사실을 트리거로 명시적으로 알려야 한다.
+            if (set.startSwing != null)
+            {
+                var startState = stateMachine.AddState("StartSwing");
+                startState.motion = set.startSwing;
+
+                var toStart = stateMachine.AddAnyStateTransition(startState);
+                toStart.hasExitTime = false;
+                toStart.duration = 0.05f;
+                toStart.canTransitionToSelf = false;
+                toStart.AddCondition(AnimatorConditionMode.If, 0f, "SwingStarted");
+
+                // 재생이 끝나면(exitTime) 자동으로 루프로 넘어간다 — Reeling·HighFlight처럼
+                // 조건으로 가르지 않는 이유는 붙는 순간은 항상 SwingLoop에서 시작해야 하기 때문이다.
+                var startToLoop = startState.AddTransition(swingState);
+                startToLoop.hasExitTime = true;
+                startToLoop.exitTime = 0.9f;
+                startToLoop.duration = 0.1f;
+            }
+
+            if (set.swingLand != null)
+            {
+                var landState = stateMachine.AddState("SwingLand");
+                landState.motion = set.swingLand;
+
+                var toLand = stateMachine.AddAnyStateTransition(landState);
+                toLand.hasExitTime = false;
+                toLand.duration = 0.1f;
+                toLand.canTransitionToSelf = false;
+                toLand.AddCondition(AnimatorConditionMode.If, 0f, "SwingEnded");
+
+                // 돌아갈 곳을 안 잇는다. 놓는 순간 SwingConstraint가 이 레이어 가중치를
+                // 서서히 0으로 내리므로(UpdateAnimator), 이 클립이 보이는 동안 자연히
+                // 기본 레이어(착지/이동)로 섞여 들어간다 — 상태 기계가 SwingLoop으로
+                // 되돌아갈 필요가 없다.
+            }
 
             if (set.reelLoop != null)
             {
@@ -272,6 +387,44 @@ namespace Momentum.Player.EditorTools
             // 컨트롤러 에셋에 반영된다. Unity의 layers가 struct 배열이라 생기는 규칙이다.
             var layers = controller.layers;
             layers[layers.Length - 1] = swingLayer;
+            controller.layers = layers;
+        }
+
+        /// <summary>
+        /// 갈고리를 쏘는 순간 팔(+상체)만 겹쳐 보여주는 전용 레이어.
+        ///
+        /// 스윙 레이어와 달리 <b>가중치를 코드가 아니라 여기서 항상 0으로 깔아둔다.</b>
+        /// 쏘는 동작은 짧고 일회성이라 SwingConstraint처럼 매 프레임 상태를 들고 있을
+        /// 이유가 없다 — <c>GrappleGun</c>이 트리거를 쏘는 순간에만 잠깐 1로 올렸다가
+        /// 스스로 0으로 되돌린다(간단한 타이머). 마스크로 팔만 남기는 이유는, 걷거나
+        /// 뛰는 중에 쏴도 다리는 그대로 이동을 계속해야 하기 때문이다 — 전신을 덮으면
+        /// 쏘는 순간 발이 멈추거나 이동 애니메이션과 어긋난다.
+        /// </summary>
+        private static void BuildGrappleFireLayer(AnimatorController controller, PlayerAnimationSet set)
+        {
+            controller.AddParameter("Fire", AnimatorControllerParameterType.Trigger);
+
+            controller.AddLayer("GrappleFire");
+            var fireLayer = controller.layers[controller.layers.Length - 1];
+            fireLayer.defaultWeight = 0f;
+            fireLayer.blendingMode = AnimatorLayerBlendingMode.Override;
+            if (set.grappleFireMask != null) fireLayer.avatarMask = set.grappleFireMask;
+
+            var stateMachine = fireLayer.stateMachine;
+            var fireState = stateMachine.AddState("Fire");
+            fireState.motion = set.grappleFire;
+            stateMachine.defaultState = fireState;
+
+            // canTransitionToSelf를 켜야 연사(누르고 있는 동안 재시도)할 때마다 클립이
+            // 처음부터 다시 재생된다 — 꺼두면 이미 그 상태인 동안 들어온 트리거는 무시된다.
+            var restart = stateMachine.AddAnyStateTransition(fireState);
+            restart.hasExitTime = false;
+            restart.duration = 0f;
+            restart.canTransitionToSelf = true;
+            restart.AddCondition(AnimatorConditionMode.If, 0f, "Fire");
+
+            var layers = controller.layers;
+            layers[layers.Length - 1] = fireLayer;
             controller.layers = layers;
         }
 
