@@ -49,6 +49,13 @@ namespace Momentum.Player
                  "중간에 지형에 걸렸을 때 영원히 끌려가는 상태로 남지 않게 한다.")]
         [Min(0.1f)][SerializeField] private float maxDuration = 2.5f;
 
+        [Tooltip("평평한(옥상 같은) 목표는 내 발보다 이만큼 위에 있어야 견인을 시작한다.\n\n" +
+                 "이게 없으면 넓은 옥상 위에서 우클릭할 때마다 6m 넘게 떨어진 같은 바닥을 " +
+                 "다시 잡아, 그 자리로 짧게 견인 → 도착 → 릴리즈가 한 번에 일어나며 릴리즈 " +
+                 "직후 에어루프 애니메이션이 튀어나온다. 벽면(수직) 목표는 이 제한을 안 받는다 " +
+                 "— 다른 건물 벽을 타고 오르는 것은 정상 동작이다.")]
+        [SerializeField] private float minClimbHeight = 1f;
+
         [Header("도착 — 여기서 속도를 새로 쓴다")]
         [Tooltip("도착 시 최소 수평 속도(m/s). 이미 이보다 빠르면 그 속도를 유지한다 — " +
                  "스윙으로 벌어둔 속도를 견인이 깎으면 '지킨다' 축이 무너진다.")]
@@ -58,11 +65,20 @@ namespace Momentum.Player
                  "견인을 연타할수록 높아져 감기와 같은 폭주가 다시 생긴다.")]
         [Min(0f)][SerializeField] private float exitUpSpeed = 9f;
 
+        [Header("애니메이션")]
+        [Tooltip("Zip 레이어 가중치가 오르내리는 속도(초당). 0이면 즉시 전환된다 — " +
+                 "그러면 견인이 끝나는 순간 자세가 뚝 끊겨 튄다.")]
+        [Min(0f)][SerializeField] private float animLayerLerpSpeed = 8f;
+
         /// <summary>견인 중인가. 스윙 쪽이 이 값을 보고 서로 끼어들지 않게 한다.</summary>
         public bool IsZipping { get; private set; }
 
         private Rigidbody _rb;
         private PlayerMovement _movement;
+        private Animator _animator;
+
+        /// <summary>Zip 레이어 인덱스. 클립을 안 채웠으면 -1로 남고 가중치 조작을 건너뛴다.</summary>
+        private int _zipLayerIndex = -1;
 
         /// <summary>끌려갈 목표. 앵커가 움직일 수 있으므로 트랜스폼과 로컬 좌표로 들고 있는다.</summary>
         private Transform _targetTransform;
@@ -86,6 +102,9 @@ namespace Momentum.Player
         {
             _rb = GetComponent<Rigidbody>();
             _movement = GetComponent<PlayerMovement>();
+            // 스킨 메시는 자식으로 붙는다 — 캡슐 자체엔 Animator가 없다.
+            _animator = GetComponentInChildren<Animator>();
+            if (_animator != null) _zipLayerIndex = _animator.GetLayerIndex("Zip");
             if (gun == null) gun = GetComponent<GrappleGun>();
 
             if (gun == null)
@@ -122,7 +141,15 @@ namespace Momentum.Player
         private void TryStart()
         {
             if (IsZipping || gun == null || gun.IsAttached) return;
-            if (!gun.TryFindAnchor(out RaycastHit hit)) return;
+            // 소품은 견인 목표에서 뺀다 — 옥상 위에서 우클릭했을 때 바로 옆 드럼통으로
+            // 순간 이동해버리는 사고를 막는다. 견인은 건물끼리 옮겨다니는 동작이다.
+            if (!gun.TryFindAnchor(out RaycastHit hit, includeProps: false)) return;
+
+            // 평평한 면인데 내 발보다 안 높으면 거부한다 — "같은 옥상 바닥을 다시 잡는" 것을
+            // 걸러낸다. 벽면(normal.y가 낮음)은 그대로 통과시킨다 — 다른 건물 벽을 타고
+            // 오르는 것은 막을 이유가 없다.
+            bool flatSurface = hit.normal.y >= gun.RoofNormalMinY;
+            if (flatSurface && hit.point.y < transform.position.y + minClimbHeight) return;
 
             _targetTransform = hit.collider.transform;
             _targetLocalPoint = _targetTransform.InverseTransformPoint(hit.point);
@@ -133,6 +160,25 @@ namespace Momentum.Player
             // 지상 이동이 매 스텝 수평 속도를 대입하므로, 막지 않으면 견인 속도가
             // 곧바로 지워진다. 스윙이 쓰는 것과 같은 스위치다.
             if (_movement != null) _movement.SuspendHorizontalControl = true;
+        }
+
+        /// <summary>
+        /// 견인 자세를 켜고 끈다.
+        ///
+        /// <c>IsZipping</c>으로 통째로 리턴하지 않고 매 프레임 도는 이유는 스윙 레이어와
+        /// 같다 — 끝나는 순간 가중치가 뚝 0으로 끊기면 자세가 튀므로, 끝난 뒤에도 계속
+        /// 돌면서 서서히 내려야 한다.
+        /// </summary>
+        private void Update()
+        {
+            if (_animator == null || _zipLayerIndex < 0) return;
+
+            float target = IsZipping ? 1f : 0f;
+            float current = _animator.GetLayerWeight(_zipLayerIndex);
+            float next = animLayerLerpSpeed <= 0f
+                ? target
+                : Mathf.MoveTowards(current, target, animLayerLerpSpeed * Time.deltaTime);
+            _animator.SetLayerWeight(_zipLayerIndex, next);
         }
 
         private void FixedUpdate()

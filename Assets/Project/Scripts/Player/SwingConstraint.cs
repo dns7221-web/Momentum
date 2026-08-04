@@ -409,7 +409,9 @@ namespace Momentum.Player
         /// </summary>
         private void FixedUpdate()
         {
-            bool attached = gun != null && gun.IsAttached;
+            // 소품 앵커는 스윙에서 뺀다 — 소품을 잡는 것은 전투(끌어오기·던지기)를 보여주려는
+            // 것이지 스윙을 돕는 것이 아니다. gun.IsPropAnchor를 확인.
+            bool attached = gun != null && gun.IsAttached && !gun.IsPropAnchor;
 
             if (attached && !_swinging) BeginSwing();
             else if (!attached && _swinging) EndSwing();

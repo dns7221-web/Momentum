@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace Momentum.Player
@@ -37,6 +38,22 @@ namespace Momentum.Player
         public AnimationClip diveStart;
         [Tooltip("공중에 떠 있는 동안 반복. 짧은 점프에는 안 쓰이고 이 낙하 사슬에서만 쓰인다.")]
         public AnimationClip airLoop;
+
+        [Tooltip("공중 자세의 <b>추가 변형</b>. 비워두면 위 airLoop 하나만 쓴다.\n\n" +
+                 "채우면 공중에 뜰 때마다 이 중 하나를 무작위로 골라 재생한다 — 같은 상황에서도 " +
+                 "자세가 달라져 반복적으로 안 보인다. 낙하 <b>도중에</b> 바뀌지는 않는다. " +
+                 "한 번 고르면 착지할 때까지 그 자세를 유지한다.")]
+        public List<AnimationClip> airLoopVariants = new List<AnimationClip>();
+
+        /// <summary>실제로 쓸 공중 자세 목록. <see cref="airLoop"/>이 항상 첫 번째다.</summary>
+        public List<AnimationClip> AirLoopClips()
+        {
+            var clips = new List<AnimationClip>();
+            if (airLoop != null) clips.Add(airLoop);
+            foreach (var clip in airLoopVariants)
+                if (clip != null && !clips.Contains(clip)) clips.Add(clip);
+            return clips;
+        }
         [Tooltip("착지. 비우면 착지하는 순간 바로 이동 상태로 돌아간다.")]
         public AnimationClip land;
 
@@ -51,6 +68,12 @@ namespace Momentum.Player
         [Tooltip("로프를 놓는 순간 한 번 재생. 없으면 스윙 레이어가 가중치만 서서히 " +
                  "내려가며 기본 레이어(낙하/이동)로 바로 넘어간다.")]
         public AnimationClip swingLand;
+
+        [Header("견인 (우클릭) — 비우면 견인 레이어를 만들지 않는다")]
+        [Tooltip("갈고리로 끌려가는 동안 반복. 없으면 견인 중에 <b>전용 자세가 없어</b> " +
+                 "기본 레이어의 공중 자세와 스윙 레이어의 잔여 가중치가 그대로 겹쳐 보인다 — " +
+                 "우클릭인데 스윙 자세가 같이 나오던 원인이 이것이다.")]
+        public AnimationClip zipLoop;
 
         [Header("갈고리 발사 (좌클릭 순간, 팔만) — 비우면 발사 레이어를 만들지 않는다")]
         [Tooltip("총을 들어 쏘는 순간 한 번 재생. 걷기·점프·스윙 위에 팔만 얹히므로, " +

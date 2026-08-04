@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
@@ -22,6 +23,11 @@ namespace Momentum.Player
         [Tooltip("갈고리가 걸리는 레이어. Ground는 반드시 빠져 있어야 한다 — " +
                  "아스팔트에 붙으면 스윙이 아니라 지면 견인이 된다.")]
         [SerializeField] private LayerMask anchorMask;
+
+        [Tooltip("소품(드럼통·상자 등)이 걸리는 레이어. 건물과 분리해두는 이유는 아래 " +
+                 "'옥상 올려붙이기'·벽면 판정이 전부 건물 지오메트리를 전제하기 때문이다 — " +
+                 "소품을 맞추면 그 로직을 건너뛰고 맞은 지점에 그대로 붙는다.")]
+        [SerializeField] private LayerMask propMask;
 
         [Header("조준 보조")]
         [Tooltip("정중앙이 빗나갔을 때 크로스헤어에서 이 각도 안까지 후보를 찾아본다. " +
@@ -129,6 +135,35 @@ namespace Momentum.Player
         public Rigidbody AnchorBody { get; private set; }
 
         /// <summary>
+        /// 지금 붙은 앵커가 소품(<see cref="propMask"/>)인가.
+        ///
+        /// <see cref="SwingConstraint"/>가 이 값으로 스윙 시작을 가른다. 소품을 잡는 것은
+        /// 스윙을 도우려는 게 아니라 전투(끌어오기·던지기)를 보여주려는 것이라, 붙는
+        /// 순간 펜듈럼 물리가 같이 시작되면 안 된다 — 건물이든 드럼통이든 구분 없이
+        /// 스윙부터 걸리는 것이 애초에 이 플래그가 생긴 이유다.
+        /// </summary>
+        public bool IsPropAnchor { get; private set; }
+
+        /// <summary>
+        /// 부착이 막 풀렸다는 신호. <see cref="Detach"/> 끝에서 한 번 울린다.
+        ///
+        /// 버튼을 놓았든, 충돌로 <see cref="ForceDetach"/>가 불렸든, 컴포넌트가 꺼졌든
+        /// 전부 이 하나로 온다. <see cref="WebGrabThrow"/>가 "쥐고 있던 걸 지금 던져야
+        /// 하는가"를 판단하는 신호로 쓴다 — 입력 액션을 따로 구독하지 않고 여기 하나에
+        /// 걸어두면, 부착이 끊기는 경로가 나중에 하나 더 늘어도 자동으로 같이 반영된다.
+        /// </summary>
+        public event Action Detached;
+
+        /// <summary>
+        /// 법선의 y가 이 값 이상이면 "평평한(옥상 같은) 면"으로 본다.
+        ///
+        /// <see cref="GrappleZip"/>이 "같은 옥상 바닥을 다시 잡는" 것을 걸러낼 때 이
+        /// 기준을 그대로 빌려 쓴다 — 벽이냐 바닥이냐를 가르는 기준이 두 군데서 서로
+        /// 다르면 언젠가 어긋난다.
+        /// </summary>
+        public float RoofNormalMinY => roofNormalMinY;
+
+        /// <summary>
         /// 로프를 잠시 다른 목표로 그린다. <c>null</c>이면 평소대로 앵커까지 그린다.
         ///
         /// <see cref="GrappleZip"/>이 견인하는 동안 쓴다. 줄을 그리는 책임은 여기 하나로
@@ -157,6 +192,7 @@ namespace Momentum.Player
         private void Reset()
         {
             anchorMask = LayerMask.GetMask(Level.CityGenerator.AnchorLayerName);
+            propMask = LayerMask.GetMask(Level.CityGenerator.GrabbableLayerName);
         }
 
         private void Awake()
@@ -178,6 +214,12 @@ namespace Momentum.Player
             {
                 Debug.LogWarning("[GrappleGun] 앵커 레이어 마스크가 비어 있어 아무 데도 붙지 않는다. " +
                                  $"'{Level.CityGenerator.AnchorLayerName}'을 선택할 것.", this);
+            }
+
+            if (propMask == 0)
+            {
+                Debug.LogWarning("[GrappleGun] 소품 레이어 마스크가 비어 있어 소품에는 안 붙는다. " +
+                                 $"'{Level.CityGenerator.GrabbableLayerName}'을 선택할 것.", this);
             }
 
             SetRopeVisible(false);
@@ -296,7 +338,19 @@ namespace Momentum.Player
         /// 때문이다. 레이캐스트를 두 벌 두면 사거리·레이어 마스크·카메라 보정이 언젠가
         /// 반드시 어긋나고, 그때 "왜 스윙은 붙는데 견인은 안 붙지"를 못 가린다.
         /// </summary>
-        public bool TryFindAnchor(out RaycastHit hit)
+        public bool TryFindAnchor(out RaycastHit hit) => TryFindAnchor(out hit, includeProps: true);
+
+        /// <summary>
+        /// <paramref name="includeProps"/>가 <c>false</c>면 소품(<see cref="propMask"/>)은
+        /// 아예 안 보고 건물만 찾는다.
+        ///
+        /// <see cref="GrappleZip"/>이 이걸 필요로 한다. 견인은 "옥상에서 다음 옥상으로
+        /// 점프"하는 동작인데, 프롭까지 목표로 잡히면 옥상 위에 서서 우클릭만 해도 바로
+        /// 옆 드럼통·에어컨 실외기로 순간 견인되며 Zip 애니메이션이 튀어나온다 — 붙기만
+        /// 하고 안 당기는 <see cref="WebGrabThrow"/>와 다르게, 견인은 <b>진짜로 그 자리까지
+        /// 이동</b>하므로 이 사고가 훨씬 크게 보인다.
+        /// </summary>
+        public bool TryFindAnchor(out RaycastHit hit, bool includeProps)
         {
             hit = default;
             if (aimCamera == null) return false;
@@ -309,7 +363,7 @@ namespace Momentum.Player
             Vector3 center = aimCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f)).direction;
 
             // 정중앙을 먼저 본다. 겨눈 그대로 붙는 경험이 기본이어야 조준이 조작으로 남는다.
-            if (CastAnchor(origin, center, distance, out hit)) return true;
+            if (CastAnchor(origin, center, distance, includeProps, out hit)) return true;
 
             if (aimAssistAngle <= 0f || aimAssistRays <= 0) return false;
 
@@ -326,18 +380,24 @@ namespace Momentum.Player
                 Vector3 direction = Quaternion.AngleAxis(spin, center)
                                   * (Quaternion.AngleAxis(radius, up) * center);
 
-                if (CastAnchor(origin, direction, distance, out hit)) return true;
+                if (CastAnchor(origin, direction, distance, includeProps, out hit)) return true;
             }
 
             return false;
         }
 
         /// <summary>레이 하나를 쏘고 사거리·고도까지 전부 통과했는지 본다.</summary>
-        private bool CastAnchor(Vector3 origin, Vector3 direction, float distance, out RaycastHit hit)
+        private bool CastAnchor(Vector3 origin, Vector3 direction, float distance, bool includeProps, out RaycastHit hit)
         {
-            if (!Physics.Raycast(origin, direction, out hit, distance, anchorMask,
+            int mask = includeProps ? anchorMask | propMask : anchorMask;
+            if (!Physics.Raycast(origin, direction, out hit, distance, mask,
                                  QueryTriggerInteraction.Ignore))
                 return false;
+
+            // 소품은 건물이 아니다 — 옥상 올려붙이기·벽면 판정은 전부 건물 지오메트리를
+            // 전제로 한 로직이라, 소품에 그대로 적용하면 맞은 자리가 아니라 소품의 바운즈
+            // 위 허공으로 부착점이 튄다. 소품은 맞은 지점에 그대로 붙는다.
+            if (IsPropLayer(hit.collider.gameObject.layer)) return IsUsableAnchor(hit.point);
 
             // 윗면을 맞았으면 그대로 쓴다. 벽면이면 그 위 옥상으로 올려본다.
             if (hit.normal.y >= roofNormalMinY) return IsUsableAnchor(hit.point);
@@ -345,6 +405,8 @@ namespace Momentum.Player
 
             return allowWallAnchors && IsUsableAnchor(hit.point);
         }
+
+        private bool IsPropLayer(int layer) => (propMask.value & (1 << layer)) != 0;
 
         /// <summary>
         /// 벽면 앵커를 그 위 옥상 모서리로 올린다.
@@ -442,6 +504,7 @@ namespace Momentum.Player
             _anchorTransform = hit.collider.transform;
             _anchorLocalPoint = _anchorTransform.InverseTransformPoint(hit.point);
             AnchorBody = hit.collider.attachedRigidbody;
+            IsPropAnchor = IsPropLayer(hit.collider.gameObject.layer);
             IsAttached = true;
 
             SetRopeVisible(true);
@@ -475,8 +538,10 @@ namespace Momentum.Player
             IsAttached = false;
             _anchorTransform = null;
             AnchorBody = null;
+            IsPropAnchor = false;
 
             SetRopeVisible(false);
+            Detached?.Invoke();
         }
 
         // ─── 그리기 ───

@@ -33,11 +33,33 @@ namespace Momentum.Player
                  "더 잘 날아가면 로프를 걸 이유가 없어진다.")]
         [Min(0f)][SerializeField] private float airAcceleration = 12f;
 
+        [Header("착지 예측 — 착지 애니메이션을 닿기 전에 미리 튼다")]
+        [Tooltip("Grounded는 발이 실제로 닿은 뒤에야 참이 된다. 그 신호로 착지 클립을 걸면 " +
+                 "항상 닿은 다음에야 재생을 시작해 순서가 거꾸로 보인다 — 이게 그 문제를 " +
+                 "잡는 값이다. 발밑으로 이 시간만큼 미리 레이를 쏴서, 그만큼 앞서 착지를 " +
+                 "예고한다. 낙하 속도가 빠를수록 같은 시간이라도 더 먼 거리를 본다.")]
+        [Min(0f)][SerializeField] private float landingAnticipationTime = 0.2f;
+
+        [Tooltip("착지 예측 레이가 맞는 레이어. 땅과 건물 옥상 둘 다 있어야 한다 — 옥상 " +
+                 "착지도 미리 예고돼야 하므로.")]
+        [SerializeField] private LayerMask groundCheckMask = ~0;
+
         [Tooltip("접지 상태에서 이보다 작은 상향 속도는 매 스텝 0으로 지운다. " +
                  "인도 턱 같은 단차에서 depenetration이 얹는 잔여 튐을 지우기 위한 값이다.\n\n" +
                  "jumpSpeed보다 확실히 낮게 둘 것 — 점프 직후 한 프레임 접지 신호가 " +
                  "남았을 때 이 값이 점프 속도까지 지워버리면 점프가 거의 안 뛰는 것처럼 된다.")]
         [Min(0f)][SerializeField] private float residualLiftClamp = 2f;
+
+        [Header("턱 오르기 — 인도 턱에 걸려 못 넘어가는 것을 푼다")]
+        [Tooltip("이 높이 아래에서만 닿은 장애물은 '넘을 수 있는 턱'으로 본다. " +
+                 "이 키트의 인도 턱이 15cm이므로 그보다 넉넉히, 다만 무릎보다는 낮게.")]
+        [Min(0f)][SerializeField] private float stepHeight = 0.35f;
+
+        [Tooltip("턱을 만났을 때 위로 주는 속도(m/s).\n\n" +
+                 "<b>residualLiftClamp보다 반드시 커야 한다.</b> 접지 상태에서 그 값보다 작은 " +
+                 "상승 속도는 매 스텝 0으로 지워지므로, 작게 주면 여기서 준 속도가 바로 " +
+                 "그 클램프에 먹혀 영영 못 올라간다 — 실제로 그게 턱에 걸리던 원인이었다.")]
+        [Min(0f)][SerializeField] private float stepUpSpeed = 3f;
 
         [Header("안전망 — 도시 밖으로 날아가는 것에 대한 최후 방어선")]
         [Tooltip("원점에서 이 거리(XZ)를 넘으면 마지막 접지 위치로 되돌린다.")]
@@ -104,6 +126,16 @@ namespace Momentum.Player
 
         private static readonly int SpeedHash = Animator.StringToHash("Speed");
         private static readonly int AirTimeHash = Animator.StringToHash("AirTime");
+        private static readonly int SwingLandingHash = Animator.StringToHash("SwingLanding");
+        private static readonly int LandingSoonHash = Animator.StringToHash("LandingSoon");
+
+        /// <summary>
+        /// 직전 공중 구간이 스윙에서 시작됐는가. 착지 순간 일반 착지와 스윙 착지를 가른다.
+        ///
+        /// 착지할 때는 이미 스윙이 끝난 뒤라 <c>SuspendHorizontalControl</c>로는 알 수 없다.
+        /// 놓는 순간 켜두고 <b>땅에 닿을 때 끈다</b> — 그 사이가 곧 "스윙에서 내려오는 중"이다.
+        /// </summary>
+        private bool _swingLanding;
         private static readonly int GroundedHash = Animator.StringToHash("Grounded");
         private static readonly int JumpHash = Animator.StringToHash("Jump");
         private static readonly int FallingHash = Animator.StringToHash("Falling");
@@ -139,12 +171,24 @@ namespace Momentum.Player
         /// </summary>
         private bool _groundContact;
 
+        /// <summary>
+        /// 이번 스텝에 <b>낮은 데만</b> 닿은 장애물이 있었는지. <see cref="_groundContact"/>와
+        /// 같은 방식으로 콜백이 채우고 FixedUpdate가 읽은 뒤 끈다.
+        /// </summary>
+        private bool _lowObstacleContact;
+
+        /// <summary>턱을 넘느라 뜬 구간의 끝. 이때까지는 공중이어도 낙하로 세지 않는다.</summary>
+        private float _stepGraceUntil;
+
         private bool _jumpRequested;
         private float _horizontalSpeed;
+        private CapsuleCollider _capsule;
 
         private void Awake()
         {
             _rb = GetComponent<Rigidbody>();
+            // 턱 높이 판정의 기준선(발밑)을 잡는 데 쓴다.
+            _capsule = GetComponent<CapsuleCollider>();
             // 스킨 메시는 자식 프리팹으로 붙는다 — 캡슐 자체엔 Animator를 두지 않는다.
             _animator = GetComponentInChildren<Animator>();
 
@@ -199,16 +243,31 @@ namespace Momentum.Player
 
         private void EvaluateContacts(Collision collision)
         {
+            // 이 콜라이더가 "넘을 수 있는 턱"인지 판정하려면 한 접촉점만 봐서는 안 된다.
+            // 낮은 데만 닿았으면 턱이고, 위쪽에도 닿았으면 벽이다 — 그래서 이 콜라이더의
+            // 접촉을 전부 훑은 뒤에 결론을 낸다. 벽에도 낮은 접촉점은 있기 때문에
+            // "낮은 곳에 닿았다"만으로 판정하면 벽을 기어오르게 된다.
+            float stepCeiling = (_capsule != null ? _capsule.bounds.min.y : _rb.position.y) + stepHeight;
+            bool touchedLow = false;
+            bool touchedHigh = false;
+
             for (int i = 0; i < collision.contactCount; i++)
             {
+                var contact = collision.GetContact(i);
+
                 // 접촉면의 법선이 충분히 위를 향하면 바닥, 아니면 벽이다.
                 // 이 한 줄이 벽에 붙어 무한히 점프하던 문제를 막는다.
-                if (Vector3.Angle(collision.GetContact(i).normal, Vector3.up) <= maxSlopeAngle)
+                if (Vector3.Angle(contact.normal, Vector3.up) <= maxSlopeAngle)
                 {
                     _groundContact = true;
-                    return;
+                    continue; // 아래 턱 판정도 마저 해야 하므로 여기서 빠져나가지 않는다
                 }
+
+                if (contact.point.y < stepCeiling) touchedLow = true;
+                else touchedHigh = true;
             }
+
+            if (touchedLow && !touchedHigh) _lowObstacleContact = true;
         }
 
         private void FixedUpdate()
@@ -226,15 +285,30 @@ namespace Momentum.Player
             }
 
             _isGrounded = _groundContact;
+            bool lowObstacle = _lowObstacleContact;
             // 다음 스텝의 충돌 콜백이 다시 채운다. 발이 떨어지면 아무도 안 채우므로 false로 남는다.
             _groundContact = false;
+            _lowObstacleContact = false;
 
             // 스윙을 막 놓은 프레임인지. 아래 두 곳에서 쓴다.
             bool justReleasedSwing = _wasSuspended && !SuspendHorizontalControl;
             _wasSuspended = SuspendHorizontalControl;
 
+            // 놓는 순간 켜고 땅에 닿을 때 끈다 — 그 사이가 "스윙에서 내려오는 중"이다.
+            if (justReleasedSwing) _swingLanding = true;
+            else if (_isGrounded) _swingLanding = false;
+
             if (_isGrounded)
             {
+                _airTime = 0f;
+                _falling = false;
+            }
+            else if (Time.time < _stepGraceUntil)
+            {
+                // 턱을 넘느라 잠깐 뜬 것은 낙하가 아니다. stepUpSpeed로 실제로 몸이
+                // 떠오르므로 접지가 끊기는데, 그 체공 시간(3m/s·중력 14.7에서 약 0.41초)이
+                // AirIdle 문턱(0.25초)을 넘겨 턱을 넘을 때마다 공중 자세가 나왔다.
+                // 스스로 올라타려고 준 속도이므로 여기서는 낙하로 세지 않는다.
                 _airTime = 0f;
                 _falling = false;
             }
@@ -293,6 +367,25 @@ namespace Momentum.Player
                     // Project Settings의 Max Depenetration Velocity)은 점프 속도보다 훨씬
                     // 작으므로, 그 사이 어딘가에 문턱을 두면 점프는 안 건드리고 턱 튐만 잡는다.
                     if (velocity.y > 0f && velocity.y < residualLiftClamp) velocity.y = 0f;
+
+                    // 낮은 턱에 막혀 있으면 올라탄다. <b>위 클램프보다 뒤에 와야 한다</b> —
+                    // 앞에 두면 여기서 준 속도를 그 클램프가 곧바로 지운다.
+                    //
+                    // 실제로 그게 "인도 턱에 걸려 못 넘어간다"의 원인이었다. 턱(15cm)을
+                    // 넘으려면 √(2gh) ≈ 2.1m/s가 필요한데 클램프가 2였고, 솔버가 밀어주는
+                    // 상승분은 그보다 훨씬 잘게 쌓이므로 매 스텝 전부 0이 됐다. 그렇게
+                    // 붙잡혀 있는 동안 접지가 끊겼다 붙었다 하면서 낙하 판정까지 켜져
+                    // 공중 애니메이션이 나오던 것이 같은 원인의 다른 증상이다.
+                    if (lowObstacle && moveDir.sqrMagnitude > 0.0001f)
+                    {
+                        velocity.y = stepUpSpeed;
+
+                        // 이 도약이 끝날 때까지는 낙하로 세지 않는다. 시간을 상수로 박지 않고
+                        // 여기서 계산하는 이유는, 속도나 중력을 바꾸면 체공 시간도 따라
+                        // 달라지기 때문이다 — 값이 두 군데로 갈라져 어긋나는 것을 막는다.
+                        float hopTime = 2f * stepUpSpeed / Mathf.Max(1f, Physics.gravity.magnitude);
+                        _stepGraceUntil = Time.time + hopTime + 0.05f;
+                    }
                 }
                 else
                 {
@@ -354,6 +447,36 @@ namespace Momentum.Player
                     _rb.MoveRotation(rotated);
                 }
             }
+
+            UpdateLandingAnticipation(velocity);
+        }
+
+        /// <summary>
+        /// 착지가 곧 임박했는지 미리 잰다. "곧 임박"의 기준은 <b>거리가 아니라 시간</b>이다 —
+        /// 발밑으로 이만큼 먼 거리를 보는 게 아니라, <c>landingAnticipationTime</c>초 뒤에
+        /// 닿을 위치를 본다. 그래서 빠르게 떨어질수록(속도가 클수록) 같은 시간을 맞추려면
+        /// 더 먼 거리를 봐야 하고, 그게 그대로 레이 길이가 된다 — 낙하 속도와 무관하게
+        /// 항상 "닿기 약 0.2초 전"이라는 같은 타이밍에 신호가 켜진다.
+        ///
+        /// 접지 중이거나 위로 가는 중에는 검사하지 않는다 — 착지를 예고할 이유가 없다.
+        /// </summary>
+        private void UpdateLandingAnticipation(Vector3 velocity)
+        {
+            if (_isGrounded || velocity.y >= 0f || _capsule == null)
+            {
+                _animator?.SetBool(LandingSoonHash, false);
+                return;
+            }
+
+            float lookAhead = -velocity.y * landingAnticipationTime;
+            Vector3 origin = _capsule.bounds.center;
+            float castDistance = (_capsule.bounds.extents.y - _capsule.radius) + lookAhead;
+
+            bool landingSoon = Physics.SphereCast(
+                origin, _capsule.radius, Vector3.down,
+                out _, castDistance, groundCheckMask, QueryTriggerInteraction.Ignore);
+
+            _animator?.SetBool(LandingSoonHash, landingSoon);
         }
 
         /// <summary>
@@ -436,6 +559,7 @@ namespace Momentum.Player
             // 접지 끊김까지 잡아버린다. Falling이 시간+속도로 이 문제를 피하는 것과
             // 같은 이유로, AirIdle 쪽도 raw !Grounded 대신 누적 공중 시간에 문턱을 둔다.
             _animator.SetFloat(AirTimeHash, _airTime);
+            _animator.SetBool(SwingLandingHash, _swingLanding);
         }
 
         /// <summary>

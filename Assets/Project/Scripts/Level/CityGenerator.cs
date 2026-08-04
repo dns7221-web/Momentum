@@ -21,6 +21,13 @@ namespace Momentum.Level
         public const string AnchorLayerName = "Anchorable";
 
         /// <summary>
+        /// 물리로 움직이는 프롭(드럼통·화분 등) 전용 레이어. <c>Anchorable</c>과 반드시
+        /// 분리해야 한다 — 안 나누면 스윙하려고 쏜 갈고리가 프롭에 걸려 프롭만 딸려오고
+        /// 플레이어는 추락한다(README "레이어를 반드시 나눈다" 참고).
+        /// </summary>
+        public const string GrabbableLayerName = "Grabbable";
+
+        /// <summary>
         /// 지면 레이어. 앵커 레이어와 <b>반드시</b> 분리되어야 한다.
         /// 웹이 아스팔트에 붙으면 스윙이 아니라 지면 견인이 되기 때문이다.
         /// </summary>
@@ -219,6 +226,7 @@ namespace Momentum.Level
             root.transform.SetParent(parent, false);
             int layer = LayerMask.NameToLayer(AnchorLayerName);
             int anchorMask = layer >= 0 ? (1 << layer) : ~0;
+            int grabbableLayer = ResolveGrabbableLayer();
 
             int lowCount = Mathf.Min(settings.roofPropCountMin, settings.roofPropCountMax);
             int highCount = Mathf.Max(settings.roofPropCountMin, settings.roofPropCountMax);
@@ -263,8 +271,12 @@ namespace Momentum.Level
                     prop.transform.rotation = Quaternion.Euler(0f, yaw, 0f);
                     // 소품 자체의 밑면이 옥상에 닿게 내려준다.
                     prop.transform.position = spot - Vector3.up * spec.bounds.min.y;
-                    if (layer >= 0) SetLayerRecursive(prop, layer);
                     if (settings.propColliders) AddMeshColliders(prop);
+                    // Anchorable이 아니라 Grabbable로 둔다 — 물리로 움직이는 프롭이라
+                    // 스윙 갈고리가 걸리면 안 된다. 레이어 지정이 AddPhysicsToProp보다
+                    // 먼저인 이유는 없다 — 부착 순서 자체는 무관하다.
+                    if (grabbableLayer >= 0) SetLayerRecursive(prop, grabbableLayer);
+                    AddPhysicsToProp(prop);
                     total++;
                 }
             }
@@ -437,6 +449,7 @@ namespace Momentum.Level
             var root = new GameObject("_Plazas");
             root.transform.SetParent(parent, false);
             int layer = LayerMask.NameToLayer(GroundLayerName);
+            int grabbableLayer = ResolveGrabbableLayer();
 
             int lowCount = Mathf.Min(settings.plazaPropCountMin, settings.plazaPropCountMax);
             int highCount = Mathf.Max(settings.plazaPropCountMin, settings.plazaPropCountMax);
@@ -478,8 +491,12 @@ namespace Momentum.Level
                             cx + (float)(rng.NextDouble() * 2.0 - 1.0) * halfX,
                             -spec.bounds.min.y,
                             cz + (float)(rng.NextDouble() * 2.0 - 1.0) * halfZ);
-                        if (layer >= 0) SetLayerRecursive(prop, layer);
                         if (settings.propColliders) AddMeshColliders(prop);
+                        // 바닥 타일(floorTiles)은 그대로 Ground에 남지만, 물리로 움직이는
+                        // 프롭은 Grabbable로 — 스윙 갈고리가 걸리면 안 되는 이유는 옥상
+                        // 프롭과 같다.
+                        if (grabbableLayer >= 0) SetLayerRecursive(prop, grabbableLayer);
+                        AddPhysicsToProp(prop);
                         props++;
                     }
                 }
@@ -793,8 +810,57 @@ namespace Momentum.Level
             foreach (var filter in go.GetComponentsInChildren<MeshFilter>())
             {
                 if (filter.sharedMesh == null) continue;
-                filter.gameObject.AddComponent<MeshCollider>().sharedMesh = filter.sharedMesh;
+                var mc = filter.gameObject.AddComponent<MeshCollider>();
+                mc.sharedMesh = filter.sharedMesh;
+                mc.convex = true;
             }
+        }
+
+        /// <summary>
+        /// 소품에 물리 강체(Rigidbody) 및 전투 피드백 컴포넌트(CombatProp)를 자동으로 주입한다.
+        ///
+        /// <b>isStatic을 여기서 끈다.</b> 이 함수가 끝난 뒤 <c>Generate()</c>가
+        /// <c>MarkStaticRecursive</c>로 도시 전체를 다시 Static 표시하므로, 여기서 꺼도
+        /// 소용없어 보일 수 있지만 <see cref="MarkStaticRecursive"/> 쪽도 Rigidbody가 있는
+        /// 오브젝트는 건너뛰도록 같이 고쳐뒀다 — 두 코드가 서로 다른 것에 의존하면 나중에
+        /// 한쪽만 고치는 사고가 나므로, 신호(Rigidbody 존재 여부) 하나로 두 곳 다 판단한다.
+        /// </summary>
+        private static void AddPhysicsToProp(GameObject prop)
+        {
+            if (prop == null) return;
+
+            if (prop.GetComponentInChildren<Rigidbody>() == null)
+            {
+                var rb = prop.AddComponent<Rigidbody>();
+                rb.mass = 30f; // 기본 프롭 질량 (30kg)
+                rb.interpolation = RigidbodyInterpolation.Interpolate;
+                rb.collisionDetectionMode = CollisionDetectionMode.Continuous;
+            }
+
+            if (prop.GetComponent<CombatProp>() == null)
+            {
+                prop.AddComponent<CombatProp>();
+            }
+
+            // 정적 배칭 대상이던 오브젝트에 물리를 얹은 것이므로 Static 표시를 뗀다.
+            // 안 떼면 렌더러가 정적 배치로 구워진 위치에 그대로 남아, 실제 물리 위치와
+            // 화면에 보이는 위치가 어긋난다 — 가만히 있어야 할 것끼리 미세하게 계속
+            // 파고들며 부딪히는 것처럼 보이던 증상이 이것이었다.
+            prop.isStatic = false;
+        }
+
+        /// <summary>
+        /// <see cref="GrabbableLayerName"/> 레이어 인덱스. 레이어가 아직 안 만들어져 있으면
+        /// -1을 돌려주고, 호출부는 그 경우 레이어 지정을 건너뛴다 — 없는 레이어를 억지로
+        /// 쓰려 하면 조용히 Default로 떨어져 버그를 숨긴다.
+        /// </summary>
+        private static int ResolveGrabbableLayer()
+        {
+            int layer = LayerMask.NameToLayer(GrabbableLayerName);
+            if (layer < 0)
+                Debug.LogWarning($"[CityGenerator] '{GrabbableLayerName}' 레이어가 없다. " +
+                                 "프롭이 원래 레이어에 그대로 남아, 스윙 갈고리가 걸릴 수 있다.");
+            return layer;
         }
 
         /// <summary>
@@ -1195,10 +1261,16 @@ namespace Momentum.Level
         /// 생성물을 Static으로 표시한다.
         /// 도시를 10×10으로 키우면 오브젝트가 2천 개를 넘는데, 정적 배칭이 없으면
         /// 그 수가 드로우 콜로 그대로 나온다. 도시는 움직이지 않으니 전부 켜도 된다.
+        ///
+        /// <b>단, Rigidbody가 있는 오브젝트는 건너뛴다.</b> 이 함수는 프롭 배치보다
+        /// <b>나중에</b> 도시 전체에 대고 돌기 때문에, 걸러내지 않으면 <c>AddPhysicsToProp</c>이
+        /// 방금 꺼둔 <c>isStatic</c>을 여기서 다시 켜버린다. 정적 배칭으로 구워진 오브젝트에
+        /// 물리를 걸면 렌더러 위치와 실제 물리 위치가 어긋나는데, 실제로 그 증상이
+        /// 콘솔에서 "가만히 있는 프롭끼리 계속 부딪힌다"는 로그로 나타났었다.
         /// </summary>
         private static void MarkStaticRecursive(GameObject go)
         {
-            go.isStatic = true;
+            if (go.GetComponent<Rigidbody>() == null) go.isStatic = true;
             foreach (Transform child in go.transform) MarkStaticRecursive(child.gameObject);
         }
 

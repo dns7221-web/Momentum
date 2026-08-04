@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEditor;
 using UnityEditor.Animations;
 using UnityEngine;
@@ -25,6 +26,9 @@ namespace Momentum.Player.EditorTools
         /// 넉넉히 위로 둔다.
         /// </summary>
         private const float AirIdleAirTimeThreshold = 0.25f;
+
+        /// <summary>공중 자세 변형 번호를 담는 파라미터. 빌더와 Picker가 같은 이름을 써야 한다.</summary>
+        private const string AirVariantParameter = "AirVariant";
 
         private const string OutputFolder = "Assets/Project/Player";
         private const string MenuPath = "Momentum/선택한 애니메이션 세트로 Animator Controller 만들기";
@@ -56,6 +60,12 @@ namespace Momentum.Player.EditorTools
             controller.AddParameter("Jump", AnimatorControllerParameterType.Trigger);
             controller.AddParameter("Falling", AnimatorControllerParameterType.Bool);
             controller.AddParameter("AirTime", AnimatorControllerParameterType.Float);
+            // 공중 자세 변형 번호. AirLoopVariantPicker가 낙하마다 미리 뽑아 넣는다.
+            controller.AddParameter(AirVariantParameter, AnimatorControllerParameterType.Int);
+            // 직전에 스윙을 했는가. 착지 순간 일반 착지와 스윙 착지를 가르는 데 쓴다.
+            controller.AddParameter("SwingLanding", AnimatorControllerParameterType.Bool);
+            // 발밑 레이캐스트로 미리 켜는 신호 — Grounded보다 먼저 참이 된다.
+            controller.AddParameter("LandingSoon", AnimatorControllerParameterType.Bool);
             // 기본 레이어 전용 릴리즈 신호. 스윙 레이어의 SwingEnded와 <b>일부러 이름을
             // 다르게</b> 둔다 — 유니티 트리거는 그것을 쓰는 전이가 하나 발동하면 즉시
             // 소비(reset)되므로, 두 레이어가 같은 트리거를 보면 한쪽만 먹고 다른 쪽은
@@ -102,6 +112,9 @@ namespace Momentum.Player.EditorTools
                 BuildSwingLayer(controller, set);
             else
                 Debug.LogWarning("[PlayerAnimatorBuilder] swingLoop 클립이 비어 있어 스윙 레이어 없이 만들었다.");
+
+            if (set.zipLoop != null)
+                BuildZipLayer(controller, set);
 
             if (set.grappleFire != null)
                 BuildGrappleFireLayer(controller, set);
@@ -179,20 +192,39 @@ namespace Momentum.Player.EditorTools
                 landToLocomotion.exitTime = 0.7f; // 착지 모션 끝자락에서 이동으로 녹여 넣는다
                 landToLocomotion.duration = 0.15f;
             }
+
+            // 스윙 후 착지는 <b>기본 레이어</b>에 둔다. 원래 SwingLand는 스윙 레이어에서
+            // SwingEnded(=줄을 놓는 순간)로 걸려 있었는데, 그 순간은 보통 공중 한복판이고
+            // 놓자마자 스윙 레이어 가중치가 0으로 내려가므로 <b>착지할 때쯤엔 이미 끝나
+            // 있었다.</b> 순서가 "착지 모션 → 공중"으로 거꾸로 돌던 원인이다.
+            //
+            // 신호를 Grounded로 바꾸고 자리를 기본 레이어로 옮기면, 공중 자세를 다 돌고
+            // <b>발이 닿는 순간</b> 이 상태로 들어간다. 일반 Land와 나눠 두는 이유는
+            // PlayerMovement가 "직전에 스윙했는가"를 SwingLanding으로 알려주기 때문이다 —
+            // 그냥 떨어진 착지와 스윙에서 내려온 착지를 다르게 보여줄 수 있다.
+            AnimatorState swingLandState = null;
+            if (set.swingLand != null)
+            {
+                swingLandState = layer.AddState("SwingLandOnGround");
+                swingLandState.motion = set.swingLand;
+
+                var toLocomotion = swingLandState.AddTransition(locomotion);
+                toLocomotion.hasExitTime = true;
+                toLocomotion.exitTime = 0.7f;
+                toLocomotion.duration = 0.15f;
+            }
+
             AnimatorState afterAir = landState != null ? landState : locomotion;
 
-            AnimatorState airState = null;
-            if (set.airLoop != null)
-            {
-                airState = layer.AddState("AirLoop");
-                airState.motion = set.airLoop;
+            // 공중 자세는 여러 개일 수 있다. 하나면 예전과 똑같이 AirLoop 상태 하나만 만들고,
+            // 여러 개면 AirLoop_0..n을 만들어 뜰 때마다 무작위로 하나를 고른다.
+            var airClips = set.AirLoopClips();
+            var airStates = BuildVariantStates(layer, airClips, "AirLoop");
 
-                var toGround = airState.AddTransition(afterAir);
-                toGround.hasExitTime = false; // 체공 시간이 매번 다르므로 시간이 아니라 상태로 끊는다
-                toGround.duration = 0.1f;
-                toGround.AddCondition(AnimatorConditionMode.If, 0f, "Grounded");
-            }
-            AnimatorState afterDive = airState != null ? airState : afterAir;
+            foreach (var state in airStates)
+                AddLandingTransitions(state, afterAir, swingLandState);
+
+            AnimatorState afterDive = airStates.Count > 0 ? airStates[0] : afterAir;
 
             AnimatorState diveState = null;
             if (set.diveStart != null)
@@ -200,13 +232,9 @@ namespace Momentum.Player.EditorTools
                 diveState = layer.AddState("DiveStart");
                 diveState.motion = set.diveStart;
 
-                if (airState != null)
-                {
-                    var toAir = diveState.AddTransition(airState);
-                    toAir.hasExitTime = true;
-                    toAir.exitTime = 0.9f; // 다이빙 모션이 거의 끝날 때 공중 루프로 넘어간다
-                    toAir.duration = 0.1f;
-                }
+                // 다이빙 모션이 거의 끝날 때 공중 루프로 넘어간다. 변형이 여럿이면
+                // AirVariant가 가리키는 것 하나로만 간다.
+                LinkToAirLoops(diveState, airStates, exitTime: 0.9f);
             }
             // "진짜 낙하로 확정됐을 때" 들어갈 곳. DiveStart가 있으면 거기, 없으면
             // 곧장 공중 루프/착지 단계로 — 위 afterDive와 같은 폴백 규칙이다.
@@ -224,26 +252,42 @@ namespace Momentum.Player.EditorTools
                 // 정확히 Falling이 시간+속도 문턱으로 이미 한 번 피해간 그 문제다. AirTime은
                 // PlayerMovement가 연속 공중 시간을 누적해 매 프레임 보내는 값이라, 한 스텝짜리
                 // blip은 이 문턱을 못 넘는다.
-                var airIdleState = layer.AddState("AirIdle");
-                airIdleState.motion = set.airIdle;
+                // <b>여기도 변형을 돌린다.</b> 원래는 airIdle 클립 하나만 걸었는데, 실제로
+                // 굴려보니 화면에 오래 보이는 자리가 AirLoop가 아니라 이쪽이었다 —
+                // AirLoop로 넘어가려면 Falling(시간 0.15초 + 하강 6m/s)을 통과해야 하는데
+                // 웬만한 점프·낙하는 그 전에 착지해버려서, 변형을 아무리 넣어도 계속
+                // AirIdle 한 동작만 보였다. 뽑기는 정상인데 그 결과가 안 보이는 자리에만
+                // 있었던 것이다.
+                var airIdleClips = new List<AnimationClip> { set.airIdle };
+                foreach (var clip in set.AirLoopClips())
+                    if (clip != null && !airIdleClips.Contains(clip)) airIdleClips.Add(clip);
 
-                var enterAirIdle = locomotion.AddTransition(airIdleState);
-                enterAirIdle.hasExitTime = false;
-                enterAirIdle.duration = 0.1f;
-                enterAirIdle.AddCondition(AnimatorConditionMode.Greater, AirIdleAirTimeThreshold, "AirTime");
+                var airIdleStates = BuildVariantStates(layer, airIdleClips, "AirIdle");
 
-                // 진짜 낙하로 확정되면 다이빙/공중 루프 쪽으로 넘긴다.
-                var toRealFall = airIdleState.AddTransition(afterEnter);
-                toRealFall.hasExitTime = false;
-                toRealFall.duration = 0.15f;
-                toRealFall.AddCondition(AnimatorConditionMode.If, 0f, "Falling");
+                foreach (var state in airIdleStates)
+                {
+                    // 진짜 낙하로 확정되면 다이빙/공중 루프 쪽으로 넘긴다.
+                    if (diveState != null)
+                    {
+                        var toRealFall = state.AddTransition(diveState);
+                        toRealFall.hasExitTime = false;
+                        toRealFall.duration = 0.15f;
+                        toRealFall.AddCondition(AnimatorConditionMode.If, 0f, "Falling");
+                    }
+                    else
+                    {
+                        LinkToAirLoops(state, airStates, condition: "Falling");
+                    }
 
-                // 낙하로 안 이어지고 그새 다시 땅에 닿으면(턱을 살짝 넘은 정도) 곧장
-                // 이동으로 돌아간다 — Land까지 갈 정도로 크게 뜬 게 아니었으므로.
-                var quickLand = airIdleState.AddTransition(locomotion);
-                quickLand.hasExitTime = false;
-                quickLand.duration = 0.15f;
-                quickLand.AddCondition(AnimatorConditionMode.If, 0f, "Grounded");
+                    // 낙하로 안 이어지고 그새 다시 땅에 닿으면(턱을 살짝 넘은 정도) 곧장
+                    // 이동으로 돌아간다 — Land까지 갈 정도로 크게 뜬 게 아니었으므로.
+                    // 다만 스윙에서 내려온 것이라면 그쪽 착지를 보여준다.
+                    AddLandingTransitions(state, locomotion, swingLandState);
+                }
+
+                LinkVariants(locomotion, airIdleStates, airIdleClips.Count,
+                             condition: "AirTime", mode: AnimatorConditionMode.Greater,
+                             threshold: AirIdleAirTimeThreshold);
 
                 // 스윙을 놓는 순간을 Any State에서 강제로 잡는다. 스윙 중에도 이 레이어의
                 // 상태 기계는 (안 보일 뿐) Grounded/Falling을 그대로 따라 계속 돌고 있어서,
@@ -251,11 +295,16 @@ namespace Momentum.Player.EditorTools
                 // AirLoop나 Land로 넘어가 있을 수 있고, 그러면 위 "Locomotion에서만 전이"
                 // 규칙이 걸릴 기회 자체가 없다. Any State는 현재 상태와 무관하게 항상
                 // 검사되므로, 어디에 가 있었든 놓는 순간 확실히 AirIdle로 되돌린다.
-                var forceAirIdle = layer.AddAnyStateTransition(airIdleState);
-                forceAirIdle.hasExitTime = false;
-                forceAirIdle.duration = 0.1f;
-                forceAirIdle.canTransitionToSelf = false;
-                forceAirIdle.AddCondition(AnimatorConditionMode.If, 0f, "SwingReleased");
+                for (int i = 0; i < airIdleStates.Count; i++)
+                {
+                    var forceAirIdle = layer.AddAnyStateTransition(airIdleStates[i]);
+                    forceAirIdle.hasExitTime = false;
+                    forceAirIdle.duration = 0.1f;
+                    forceAirIdle.canTransitionToSelf = false;
+                    forceAirIdle.AddCondition(AnimatorConditionMode.If, 0f, "SwingReleased");
+                    if (airIdleStates.Count > 1)
+                        forceAirIdle.AddCondition(AnimatorConditionMode.Equals, i, AirVariantParameter);
+                }
             }
             else if (diveState != null)
             {
@@ -267,11 +316,121 @@ namespace Momentum.Player.EditorTools
             else
             {
                 // 다이빙 시작 클립도 없으면 곧장 공중/착지 단계로 들어간다.
-                var enter = locomotion.AddTransition(afterDive);
-                enter.hasExitTime = false;
-                enter.duration = 0.1f;
-                enter.AddCondition(AnimatorConditionMode.If, 0f, "Falling");
+                LinkToAirLoops(locomotion, airStates, condition: "Falling");
             }
+        }
+
+        /// <summary>
+        /// 어떤 상태에서 공중 자세들로 잇는다.
+        ///
+        /// 변형이 하나면 조건 없이 그냥 잇고, 여럿이면 각각에 <c>AirVariant == i</c>를 걸어
+        /// <b>그 순간 뽑혀 있는 번호 하나로만</b> 들어가게 한다. 전이를 여러 개 만들어두고
+        /// 조건으로 가르는 이유는, 유니티 상태 기계에 "여럿 중 하나를 무작위로"가 없기
+        /// 때문이다 — 번호는 <see cref="Momentum.Player.AirLoopVariantPicker"/>가 미리 뽑아둔다.
+        /// </summary>
+        private static void LinkToAirLoops(AnimatorState from, List<AnimatorState> airStates,
+                                           float exitTime = -1f, string condition = null)
+        {
+            for (int i = 0; i < airStates.Count; i++)
+            {
+                var transition = from.AddTransition(airStates[i]);
+                if (exitTime >= 0f)
+                {
+                    transition.hasExitTime = true;
+                    transition.exitTime = exitTime;
+                }
+                else
+                {
+                    transition.hasExitTime = false;
+                }
+                transition.duration = 0.1f;
+
+                if (!string.IsNullOrEmpty(condition))
+                    transition.AddCondition(AnimatorConditionMode.If, 0f, condition);
+                if (airStates.Count > 1)
+                    transition.AddCondition(AnimatorConditionMode.Equals, i, AirVariantParameter);
+            }
+        }
+
+        /// <summary>
+        /// 공중 상태에서 착지로 나가는 전이를 단다.
+        ///
+        /// 착지 종류가 둘이라 전이도 둘이다 — 스윙에서 내려온 것이면
+        /// <paramref name="swingLand"/>로, 그냥 떨어진 것이면 <paramref name="normalLand"/>로.
+        /// <b>스윙 쪽을 먼저 단다.</b> 유니티는 전이를 등록 순서대로 검사하므로, 조건이
+        /// 겹치는 두 전이 중 먼저 등록된 것이 이긴다 — 스윙 착지를 뒤에 달면 조건이 더
+        /// 느슨한 일반 착지에 항상 먹혀 영영 안 나온다.
+        ///
+        /// 조건은 <c>Grounded</c>가 아니라 <c>LandingSoon</c>이다. <c>Grounded</c>는 발이
+        /// 실제로 닿은 뒤에야 참이 되므로, 그걸로 걸면 착지 클립이 착지 <b>후에</b> 시작해
+        /// 순서가 거꾸로 보인다. <c>LandingSoon</c>은 PlayerMovement가 낙하 속도에 맞춰
+        /// 발밑을 미리 레이로 재서, 닿기 일정 시간 전에 미리 켠다.
+        /// </summary>
+        private static void AddLandingTransitions(AnimatorState from, AnimatorState normalLand,
+                                                  AnimatorState swingLand)
+        {
+            if (swingLand != null)
+            {
+                var toSwingLand = from.AddTransition(swingLand);
+                toSwingLand.hasExitTime = false;
+                toSwingLand.duration = 0.1f;
+                toSwingLand.AddCondition(AnimatorConditionMode.If, 0f, "LandingSoon");
+                toSwingLand.AddCondition(AnimatorConditionMode.If, 0f, "SwingLanding");
+            }
+
+            var toGround = from.AddTransition(normalLand);
+            toGround.hasExitTime = false; // 체공 시간이 매번 다르므로 시간이 아니라 상태로 끊는다
+            toGround.duration = 0.1f;
+            toGround.AddCondition(AnimatorConditionMode.If, 0f, "LandingSoon");
+        }
+
+        /// <summary>
+        /// 한 상태에서 변형 상태들로, 같은 조건에 <c>AirVariant</c>만 달리 걸어 잇는다.
+        /// <see cref="LinkToAirLoops"/>와 하는 일은 같고 조건 종류(Bool이 아니라 Float 비교 등)를
+        /// 호출부가 정할 수 있다는 점만 다르다.
+        /// </summary>
+        private static void LinkVariants(AnimatorState from, List<AnimatorState> targets, int count,
+                                         string condition, AnimatorConditionMode mode, float threshold)
+        {
+            for (int i = 0; i < targets.Count; i++)
+            {
+                var transition = from.AddTransition(targets[i]);
+                transition.hasExitTime = false;
+                transition.duration = 0.1f;
+                transition.AddCondition(mode, threshold, condition);
+                if (count > 1)
+                    transition.AddCondition(AnimatorConditionMode.Equals, i, AirVariantParameter);
+            }
+        }
+
+        /// <summary>
+        /// 클립 목록으로 상태를 여러 개 만든다. 하나면 <paramref name="namePrefix"/> 그대로,
+        /// 여럿이면 <c>{namePrefix}_0</c>·<c>_1</c>...로 나누고 각각에 변형 뽑기
+        /// (<see cref="Momentum.Player.AirLoopVariantPicker"/>)를 붙인다.
+        ///
+        /// 진입·탈출 전이는 여기서 안 잇는다 — 낙하 사슬(Grounded로 나간다)과 스윙 레이어
+        /// (HighFlight로 들고난다)가 붙이는 조건이 서로 다르기 때문에, 상태를 만드는
+        /// 부분만 공용으로 빼고 배선은 호출부가 각자 한다.
+        /// </summary>
+        private static List<AnimatorState> BuildVariantStates(
+            AnimatorStateMachine stateMachine, List<AnimationClip> clips, string namePrefix)
+        {
+            var states = new List<AnimatorState>();
+            for (int i = 0; i < clips.Count; i++)
+            {
+                var state = stateMachine.AddState(clips.Count == 1 ? namePrefix : $"{namePrefix}_{i}");
+                state.motion = clips[i];
+
+                if (clips.Count > 1)
+                {
+                    var picker = state.AddStateMachineBehaviour<Momentum.Player.AirLoopVariantPicker>();
+                    picker.variantCount = clips.Count;
+                    picker.parameterName = AirVariantParameter;
+                }
+
+                states.Add(state);
+            }
+            return states;
         }
 
         /// <summary>
@@ -331,22 +490,10 @@ namespace Momentum.Player.EditorTools
                 startToLoop.duration = 0.1f;
             }
 
-            if (set.swingLand != null)
-            {
-                var landState = stateMachine.AddState("SwingLand");
-                landState.motion = set.swingLand;
-
-                var toLand = stateMachine.AddAnyStateTransition(landState);
-                toLand.hasExitTime = false;
-                toLand.duration = 0.1f;
-                toLand.canTransitionToSelf = false;
-                toLand.AddCondition(AnimatorConditionMode.If, 0f, "SwingEnded");
-
-                // 돌아갈 곳을 안 잇는다. 놓는 순간 SwingConstraint가 이 레이어 가중치를
-                // 서서히 0으로 내리므로(UpdateAnimator), 이 클립이 보이는 동안 자연히
-                // 기본 레이어(착지/이동)로 섞여 들어간다 — 상태 기계가 SwingLoop으로
-                // 되돌아갈 필요가 없다.
-            }
+            // swingLand는 여기 두지 않는다. 예전에는 이 레이어에서 SwingEnded(=줄을 놓는
+            // 순간)로 걸었는데, 그 순간은 보통 공중 한복판이라 <b>착지 모션이 착지 전에
+            // 재생되고 끝나 있었다.</b> 지금은 BuildFallChain이 기본 레이어에 두고 Grounded로
+            // 건다 — 공중 자세를 다 돌고 발이 닿을 때 나온다.
 
             if (set.reelLoop != null)
             {
@@ -369,24 +516,61 @@ namespace Momentum.Player.EditorTools
             // 쪽에만 오간다.
             if (set.airLoop != null)
             {
-                var airState = stateMachine.AddState("NinjaAirLoop");
-                airState.motion = set.airLoop;
+                // 낙하 사슬(BuildFallChain)의 AirLoop_i와 같은 클립 목록·같은 AirVariant
+                // 파라미터를 공유한다. 여기서 새로 뽑지 않고 그 값을 그대로 읽는 이유는,
+                // "공중이지만 아직 확정 안 된 자세"와 "스윙에서 크게 솟은 자세"가 둘 다
+                // 같은 종류의 순간(아치를 벗어난 큰 공중 동작)이라는 판단을 이미 내려서다
+                // (NinjaAirLoop 자체가 원래 그 이유로 만든 재사용이다).
+                var ninjaClips = set.AirLoopClips();
+                var ninjaStates = BuildVariantStates(stateMachine, ninjaClips, "NinjaAirLoop");
 
-                var toAir = swingState.AddTransition(airState);
-                toAir.hasExitTime = false;
-                toAir.duration = 0.2f;
-                toAir.AddCondition(AnimatorConditionMode.If, 0f, "HighFlight");
+                for (int i = 0; i < ninjaStates.Count; i++)
+                {
+                    var toAir = swingState.AddTransition(ninjaStates[i]);
+                    toAir.hasExitTime = false;
+                    toAir.duration = 0.2f;
+                    toAir.AddCondition(AnimatorConditionMode.If, 0f, "HighFlight");
+                    if (ninjaStates.Count > 1)
+                        toAir.AddCondition(AnimatorConditionMode.Equals, i, AirVariantParameter);
 
-                var toSwingBack = airState.AddTransition(swingState);
-                toSwingBack.hasExitTime = false;
-                toSwingBack.duration = 0.2f;
-                toSwingBack.AddCondition(AnimatorConditionMode.IfNot, 0f, "HighFlight");
+                    var toSwingBack = ninjaStates[i].AddTransition(swingState);
+                    toSwingBack.hasExitTime = false;
+                    toSwingBack.duration = 0.2f;
+                    toSwingBack.AddCondition(AnimatorConditionMode.IfNot, 0f, "HighFlight");
+                }
             }
 
             // AddLayer로 만든 레이어는 값이 배열 복사본이라, 고친 뒤 반드시 다시 넣어줘야
             // 컨트롤러 에셋에 반영된다. Unity의 layers가 struct 배열이라 생기는 규칙이다.
             var layers = controller.layers;
             layers[layers.Length - 1] = swingLayer;
+            controller.layers = layers;
+        }
+
+        /// <summary>
+        /// 견인(우클릭) 전용 레이어 — 끌려가는 동안의 전신 자세.
+        ///
+        /// 스윙 레이어와 <b>따로</b> 두는 이유는 가중치의 주인이 다르기 때문이다. 스윙
+        /// 레이어는 <c>SwingConstraint</c>가, 이쪽은 <c>GrappleZip</c>이 켜고 끈다. 한
+        /// 레이어를 둘이 나눠 쓰면 서로의 값을 매 프레임 덮어써서 어느 쪽이 이겼는지
+        /// 화면으로는 못 가린다.
+        ///
+        /// 상태가 하나뿐이라 전이도 파라미터도 없다 — 보일지 말지는 전적으로 레이어
+        /// 가중치가 정하고, 그건 <c>GrappleZip</c>이 직접 넣는다.
+        /// </summary>
+        private static void BuildZipLayer(AnimatorController controller, PlayerAnimationSet set)
+        {
+            controller.AddLayer("Zip");
+            var zipLayer = controller.layers[controller.layers.Length - 1];
+            zipLayer.defaultWeight = 0f;
+            zipLayer.blendingMode = AnimatorLayerBlendingMode.Override;
+
+            var zipState = zipLayer.stateMachine.AddState("ZipLoop");
+            zipState.motion = set.zipLoop;
+            zipLayer.stateMachine.defaultState = zipState;
+
+            var layers = controller.layers;
+            layers[layers.Length - 1] = zipLayer;
             controller.layers = layers;
         }
 
