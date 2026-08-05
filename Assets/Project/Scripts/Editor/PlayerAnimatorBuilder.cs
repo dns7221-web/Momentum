@@ -132,6 +132,9 @@ namespace Momentum.Player.EditorTools
             if (set.grappleFire != null)
                 BuildGrappleFireLayer(controller, set);
 
+            if (set.throwProp != null)
+                BuildThrowLayer(controller, set);
+
             EditorUtility.SetDirty(controller);
             AssetDatabase.SaveAssets();
 
@@ -655,6 +658,44 @@ namespace Momentum.Player.EditorTools
 
             var layers = controller.layers;
             layers[layers.Length - 1] = fireLayer;
+            controller.layers = layers;
+        }
+
+        /// <summary>
+        /// 소품을 던지는 순간 전신을 잠깐 덮는 레이어.
+        ///
+        /// <c>GrappleFire</c>와 같은 뼈대다(마스크 없이 단일 클립, 트리거로 재시작 가능한
+        /// Any State 전이 하나) — 다른 점은 <b>마스크가 없다는 것뿐</b>이다. 쏘는 동작은
+        /// 팔만 움직이면 그림이 나오지만, 던지는 동작은 몸통까지 크게 쓰는 동작이라
+        /// 마스크로 다리를 남겨두면 이동 애니메이션과 뒤섞여 이상해진다 — 던지는 그 순간은
+        /// 이동 애니메이션과 안 섞여도 된다는 판단.
+        ///
+        /// 가중치도 <c>GrappleFire</c>와 같은 방식으로 여기서는 항상 0으로 깔아두고,
+        /// <see cref="WebGrabThrow"/>가 던지는 순간에만 잠깐 1로 올렸다가 스스로 내린다
+        /// (같은 종류의 간단한 타이머).
+        /// </summary>
+        private static void BuildThrowLayer(AnimatorController controller, PlayerAnimationSet set)
+        {
+            controller.AddParameter("ThrowTrigger", AnimatorControllerParameterType.Trigger);
+
+            controller.AddLayer("Throw");
+            var throwLayer = controller.layers[controller.layers.Length - 1];
+            throwLayer.defaultWeight = 0f;
+            throwLayer.blendingMode = AnimatorLayerBlendingMode.Override;
+
+            var stateMachine = throwLayer.stateMachine;
+            var throwState = stateMachine.AddState("ThrowProp");
+            throwState.motion = set.throwProp;
+            stateMachine.defaultState = throwState;
+
+            var restart = stateMachine.AddAnyStateTransition(throwState);
+            restart.hasExitTime = false;
+            restart.duration = 0f;
+            restart.canTransitionToSelf = true;
+            restart.AddCondition(AnimatorConditionMode.If, 0f, "ThrowTrigger");
+
+            var layers = controller.layers;
+            layers[layers.Length - 1] = throwLayer;
             controller.layers = layers;
         }
 

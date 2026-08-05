@@ -56,6 +56,21 @@ namespace Momentum.Player
                  "쓴다 — 그쪽은 모서리 근처에서 구 캐스팅 결과가 애매해질 수 있어 손대지 않는다.")]
         [Min(0f)][SerializeField] private float propAssistRadius = 0.6f;
 
+        [Header("체이스 타겟 — 방금 던진 소품을 다시 맞히기 쉽게")]
+        [Tooltip("WebGrabThrow가 소품을 던지면 여기 등록해둔다. 등록된 동안은 화면 어디를 " +
+                 "겨눠도 조준선이 이 반경 안에만 들어오면 맞은 것으로 쳐준다 — 실제 충돌 " +
+                 "크기(콜라이더)와는 무관하게 판정만 후하게 준다. 작고 빠르게 날아가는 " +
+                 "물체를 평소 소품 판정(Prop Assist Radius) 수준으로 다시 맞히라는 건 " +
+                 "너무 가혹하다는 판단 — 겉모습은 그대로 작은 병이지만 '맞았다고 쳐주는 " +
+                 "범위'만 훨씬 크게 잡는다.")]
+        [Min(0f)][SerializeField] private float chaseTargetAssistRadius = 2.5f;
+
+        /// <summary>
+        /// 지금 쫓는 대상. <c>null</c>이면 평소대로 조준한다. WebGrabThrow가 소품을 던질 때
+        /// 켜고, 붙잡히거나 시간이 지나면 끈다 — 이 값이 켜져 있는 동안만 위 반경 보조가 붙는다.
+        /// </summary>
+        public Rigidbody ChaseTarget { get; set; }
+
         [Tooltip("나보다 이 각도만큼 아래인 앵커는 버린다. <b>느슨하게 두는 것이 맞다.</b> " +
                  "이 게임에서 가장 자주 쓰는 샷은 옥상 높이에서 앞 건물 꼭대기를 쏘는 것이라 " +
                  "앙각이 0° 근처이고, 크게 튀어 오른 뒤에는 주변이 전부 나보다 아래다. " +
@@ -91,6 +106,10 @@ namespace Momentum.Player
         [Tooltip("로프가 나가는 지점. 권총 프리팹 안의 Muzzle. " +
                  "물리에는 쓰지 않고 선을 그릴 때만 쓴다.")]
         [SerializeField] private Transform muzzle = null;
+        [Tooltip("총 모델의 보이는 부분(메시). 비워두면 Muzzle의 부모를 그대로 쓴다.\n\n" +
+                 "웹으로 태그하는 게 아니라 손으로 직접 잡아 던지는 동작(WebGrabThrow의 " +
+                 "E키 던지기)에서는 총이 화면에 있는 게 어색해서, 그 순간만 잠깐 꺼둔다.")]
+        [SerializeField] private GameObject visualRoot = null;
         [Tooltip("로프를 그릴 LineRenderer. 붙어 있는 동안에만 켜진다.")]
         [SerializeField] private LineRenderer rope = null;
         [Tooltip("조준 기준 카메라. 비워두면 Camera.main을 쓴다.")]
@@ -212,6 +231,7 @@ namespace Momentum.Player
         {
             if (aimCamera == null) aimCamera = Camera.main;
             if (animator == null) animator = GetComponentInChildren<Animator>();
+            if (visualRoot == null && muzzle != null) visualRoot = muzzle.parent != null ? muzzle.parent.gameObject : null;
 
             // 레이어가 없으면(GrappleFire 클립을 아직 안 채웠으면) -1로 남고,
             // 아래 Update의 SetLayerWeight는 -1일 때 아무 것도 안 하게 건너뛴다.
@@ -368,6 +388,11 @@ namespace Momentum.Player
             hit = default;
             if (aimCamera == null) return false;
 
+            // 체이스 타겟이 켜져 있으면 다른 무엇보다 먼저 본다 — 날아가는 병을 다시
+            // 맞히는 게 이번 샷의 목적이라면, 화면 어디를 겨눴든 그 병이 근처에 있으면
+            // 그걸 우선한다.
+            if (ChaseTarget != null && TryFindChaseTarget(out hit)) return true;
+
             // 사거리는 플레이어 기준인데 레이는 뒤에 있는 카메라에서 나간다. 그 차이만큼
             // 더 쏘고, 맞은 뒤에 플레이어와의 실제 거리로 다시 거른다. 카메라 거리를 빼먹으면
             // 카메라를 당길수록 사거리가 줄어드는 이상한 규칙이 생긴다.
@@ -397,6 +422,68 @@ namespace Momentum.Player
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// 크로스헤어 주변에서 <b>소품만</b> 찾는다. 건물은 아예 안 본다.
+        ///
+        /// <see cref="WebGrabThrow"/>의 E키 던지기가 이걸 쓴다. 그 동작은 애초에 건물과
+        /// 무관하므로(웹을 걸어 스윙하는 게 아니라 손으로 소품을 잡아 던지는 것), 건물까지
+        /// 같이 찾는 <see cref="TryFindAnchor(out RaycastHit)"/>를 쓰고 나중에 걸러낼
+        /// 이유가 없다 — 앞단부터 소품만 보게 좁혀둔다. 정중앙 → 빗나가면 부채꼴, 판정은
+        /// <see cref="CastPropAnchor"/>(구 캐스팅)로 나머지 소품 탐색과 완전히 같다.
+        /// </summary>
+        public bool TryFindProp(out RaycastHit hit)
+        {
+            hit = default;
+            if (aimCamera == null) return false;
+
+            Vector3 origin = aimCamera.transform.position;
+            float distance = maxRange + Vector3.Distance(origin, transform.position);
+            Vector3 center = aimCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f)).direction;
+
+            if (CastPropAnchor(origin, center, distance, out hit)) return true;
+
+            if (aimAssistAngle <= 0f || aimAssistRays <= 0) return false;
+
+            Vector3 up = aimCamera.transform.up;
+            for (int i = 0; i < aimAssistRays; i++)
+            {
+                float t = (i + 0.5f) / aimAssistRays;
+                float radius = Mathf.Sqrt(t) * aimAssistAngle;
+                float spin = i * 137.50776f;
+
+                Vector3 direction = Quaternion.AngleAxis(spin, center)
+                                  * (Quaternion.AngleAxis(radius, up) * center);
+
+                if (CastPropAnchor(origin, direction, distance, out hit)) return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// 체이스 타겟이 조준선 근처에 있는지 본다.
+        ///
+        /// <see cref="CastPropAnchor"/>와 같은 도구(<c>Physics.SphereCast</c>)를 그대로
+        /// 쓴다 — 손으로 벡터 계산을 짜지 않는다. 판정을 후하게 주는 문제는 이미
+        /// 유니티 물리 쿼리(구 캐스팅)로 풀어놨으니, 여기서 또 다른 방식을 새로 짤
+        /// 이유가 없다. 반지름만 <see cref="chaseTargetAssistRadius"/>로 훨씬 크게 줄 뿐,
+        /// 나머지(레이어 마스크, 막히면 실패하는 것)는 전부 같은 규칙이다.
+        /// </summary>
+        private bool TryFindChaseTarget(out RaycastHit hit)
+        {
+            hit = default;
+
+            Vector3 origin = aimCamera.transform.position;
+            Vector3 direction = aimCamera.transform.forward;
+            float range = maxRange + Vector3.Distance(origin, transform.position);
+
+            if (!Physics.SphereCast(origin, chaseTargetAssistRadius, direction, out hit, range,
+                                    propMask, QueryTriggerInteraction.Ignore))
+                return false;
+
+            return hit.rigidbody == ChaseTarget;
         }
 
         /// <summary>
@@ -623,6 +710,16 @@ namespace Momentum.Player
         private void SetRopeVisible(bool visible)
         {
             if (rope != null) rope.gameObject.SetActive(visible);
+        }
+
+        /// <summary>
+        /// 총 모델을 껐다 켠다. <see cref="WebGrabThrow"/>가 손으로 직접 잡아 던지는
+        /// 동작(E키) 동안만 쓴다 — 그 동작은 웹이 아니라 손이 하는 일이라, 화면에
+        /// 총이 떠 있으면 어색하다.
+        /// </summary>
+        public void SetVisible(bool visible)
+        {
+            if (visualRoot != null) visualRoot.SetActive(visible);
         }
     }
 }

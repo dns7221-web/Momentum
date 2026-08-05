@@ -1,24 +1,20 @@
 using UnityEngine;
+using UnityEngine.InputSystem;
 
 namespace Momentum.Player
 {
     /// <summary>
-    /// 웹 그랩 & 스로우 — 원거리 소품을 붙잡아 휘둘러 던진다.
+    /// 웹 그랩 & 스로우 — E키로 근처 소품을 잡아 던지고, 좌클릭으로 그 날아가는 소품을
+    /// 다시 맞히면 그쪽으로 확 끌려간다(체이스 대시).
     ///
-    /// <b>몸까지 끌고 오지 않는다.</b> 원래는 손 앞까지 당겨와 쥐는 방식이었는데, 드럼통처럼
-    /// 큰 소품은 끌려오는 동안 캐릭터를 그대로 가려버렸다. 대신 붙는 순간의 거리를 로프
-    /// 길이로 고정하고, <b>그 길이만큼 떨어진 채로 조준 방향을 계속 따라다니게</b> 한다 —
-    /// 몸에 안 붙으니 가릴 것도 없다.
-    ///
-    /// <b>"세게 휘둘렀는지"를 따로 계산하지 않는다.</b> 조준(카메라)이 도는 속도가 곧
-    /// 소품의 접선 속도다 — 원운동 공식 그대로(v = r·ω), 로프가 길수록 같은 회전에도
-    /// 더 빠르게 움직인다. 매 스텝 "따라가야 할 자리"를 계산해 그 이동량을 속도로 기록해
-    /// 두면, 마우스를 크게 휘두를수록 저절로 세게 던져진다 — 입력을 따로 해석할 필요가
-    /// 없다, 위치를 따라간 궤적 자체가 곧 속도다.
-    ///
-    /// <see cref="GrappleZip"/>·<see cref="SwingConstraint"/>과 같은 원칙 — 물리를 힘이
-    /// 아니라 속도 대입으로 다룬다. 붙잡는 동안은 <c>isKinematic</c>이라 물리 시뮬레이션
-    /// 밖에 있고, 놓는 순간에만 그동안 기록해둔 속도를 그대로 넘겨준다.
+    /// 두 입력이 완전히 다른 일을 한다.
+    /// <list type="bullet">
+    /// <item><b>E</b> — 손으로 직접 잡아 던진다. 웹이 아니라 손이 하는 일이라, 잡는 순간
+    ///       총을 잠깐 숨기고 던지기 애니메이션을 재생한다</item>
+    /// <item><b>좌클릭</b> — 평소엔 그대로 갈고리 조준이지만, 방금 던진 그 소품이 아직
+    ///       날아가는 중이면(<see cref="GrappleGun.ChaseTarget"/>) 맞히는 순간 체이스가
+    ///       된다 — 소품이 아니라 <b>내가</b> 그쪽으로 끌려간다</item>
+    /// </list>
     /// </summary>
     [RequireComponent(typeof(Rigidbody), typeof(GrappleGun))]
     public class WebGrabThrow : MonoBehaviour
@@ -27,87 +23,150 @@ namespace Momentum.Player
         [Tooltip("앵커 판정을 빌려 쓴다. 비워두면 같은 오브젝트에서 찾는다.")]
         [SerializeField] private GrappleGun gun = null;
 
-        [Tooltip("소품이 따라다닐 기준점. 비워두면 GrappleGun의 Muzzle을 그대로 쓴다 — " +
-                 "로프가 그려지는 자리와 같아야 부자연스럽지 않다.")]
-        [SerializeField] private Transform holdPoint = null;
-
         [Tooltip("조준 기준 카메라. 비워두면 Camera.main을 쓴다.")]
         [SerializeField] private Camera aimCamera = null;
 
-        [Header("무게 상한")]
-        [Tooltip("이보다 무거운 프롭은 잡지 않는다 — 로프는 붙어도 붙잡지 않는다. " +
-                 "무거운 쪽(차량 등)은 리버스 얀크가 따로 담당할 몫이다.")]
+        [Tooltip("던지는 순간 Throw 레이어를 켤 Animator. 비워두면 자식에서 찾는다.")]
+        [SerializeField] private Animator animator = null;
+
+        [Tooltip("E키 입력 (InputSystem_Actions에 새로 만들 액션).")]
+        [SerializeField] private InputActionReference throwAction = null;
+
+        [Header("잡기 → 던지기 (E)")]
+        [Tooltip("이보다 무거운 프롭은 잡지 않는다 — 무거운 쪽(차량 등)은 리버스 얀크가 " +
+                 "따로 담당할 몫이다.")]
         [Min(0f)][SerializeField] private float maxGrabMass = 50f;
 
-        [Header("휘두르기 — 몸까지 끌고 오지 않고 로프 길이만큼 떨어진 채 조준을 따라다닌다")]
-        [Tooltip("붙는 순간의 실제 거리를 로프 길이로 쓰되, 이 범위로 자른다. 하한이 없으면 " +
-                 "가까이서 붙잡은 소품이 여전히 몸 근처에 남아 가릴 수 있고, 상한이 없으면 " +
-                 "멀리서 붙잡았을 때 팔이 안 닿을 듯 어색하게 멀리 떠 있게 된다.")]
-        [Min(0.5f)][SerializeField] private float minHoldDistance = 2f;
-        [Min(0.5f)][SerializeField] private float maxHoldDistance = 6f;
+        [Tooltip("E를 누른 뒤 실제로 던져지기까지의 시간(초). 던지기 애니메이션이 팔을 " +
+                 "휘두르는 시점에 맞춰야 자연스럽다 — 클립 길이를 보고 맞출 것.")]
+        [Min(0f)][SerializeField] private float throwWindupDelay = 0.4f;
 
-        [Tooltip("따라다니는 자리가 내 위치보다 이만큼 아래로는 못 내려간다.\n\n" +
-                 "목표 자리는 '조준 방향으로 로프 길이만큼'인데, 카메라가 땅을 보면 그 " +
-                 "방향의 로프 길이 끝은 바닥 밑이다. 키네마틱이라 충돌 없이 그 자리로 그냥 " +
-                 "이동해버려 소품이 바닥에 파묻혀 사라진다 — 높이만 이 값으로 잘라서 막는다.")]
-        [Min(0f)][SerializeField] private float minHoldHeightBelowPlayer = 1f;
+        [Tooltip("던지는 순간부터 Throw 레이어 가중치를 1로 유지하는 시간(초). " +
+                 "GrappleGun의 GrappleFire 레이어와 같은 방식 — 클립 길이보다 조금 짧게 " +
+                 "두면 자연스럽게 겹쳐 끊긴다.")]
+        [Min(0f)][SerializeField] private float throwLayerHoldTime = 0.5f;
 
-        [Header("던지기")]
-        [Tooltip("놓는 순간 조준 방향으로 더 얹는 속도(m/s). 0이어도 휘두른 속도만으로 " +
-                 "던져지지만, 가만히 서서 놓아도 최소한의 힘은 실리도록 기본값을 둔다.")]
-        [Min(0f)][SerializeField] private float throwForce = 8f;
+        [Tooltip("놓는 순간 조준 방향으로 얹는 속도(m/s). 여기에 내 현재 속도가 그대로 " +
+                 "더해진다 — 정지 상태로 던지면 이 값이 전부고, 스윙 중에 던지면 그만큼 더 세다.")]
+        [Min(0f)][SerializeField] private float throwForce = 22f;
 
-        /// <summary>지금 뭔가를 붙잡아 휘두르고 있는가.</summary>
-        public bool IsHolding { get; private set; }
+        [Header("웹 체이스 대시 — 던진 소품에 좌클릭이 맞으면 그쪽으로 확 끌려간다")]
+        [Tooltip("던진 뒤 이 시간(초) 안에 맞혀야 체이스가 성립한다. 넘기면 그냥 평범하게 " +
+                 "던진 걸로 끝난다 — 영원히 '맞힐 수 있는' 상태로 남으면 안 쓰는 소품에 " +
+                 "조준 보조가 계속 붙어 있는 이상한 상황이 생긴다.")]
+        [Min(0.1f)][SerializeField] private float chaseWindowDuration = 2.5f;
+
+        [Tooltip("던진 소품의 속도가 이 아래로 떨어지면(=착지해서 멈췄다) 체이스 기회를 " +
+                 "접는다. 시간이 남아 있어도 이미 바닥에 구르는 병을 다시 맞혀 날아가는 건 " +
+                 "이상하다.")]
+        [Min(0f)][SerializeField] private float chaseSettleSpeed = 1f;
+
+        [Tooltip("맞았을 때 그 소품을 향해 끌려가는 속도(m/s).")]
+        [Min(1f)][SerializeField] private float chaseSpeed = 26f;
+
+        [Tooltip("소품과 이만큼 가까워지면 도착으로 보고 놓는다.")]
+        [Min(0.5f)][SerializeField] private float chaseArrivalDistance = 2f;
+
+        [Tooltip("도착 시 최소 수평 속도(m/s). GrappleZip과 같은 원칙 — 이미 이보다 빠르면 " +
+                 "그 속도를 유지한다.")]
+        [Min(0f)][SerializeField] private float chaseExitSpeed = 16f;
+
+        [Tooltip("도착 시 위로 얹는 속도(m/s). 순수 수평이면 곧장 떨어지므로, 체공 시간을 " +
+                 "벌어 다음 앵커를 찾을 틈을 준다.")]
+        [Min(0f)][SerializeField] private float chaseExitUpSpeed = 8f;
+
+        /// <summary>지금 E로 잡아서 던지는 중간(대기 동작)인가.</summary>
+        public bool IsWindingUp { get; private set; }
+
+        /// <summary>지금 방금 던진 소품을 향해 체이스 대시 중인가.</summary>
+        public bool IsChasing { get; private set; }
 
         private Rigidbody _rb;
         private Collider _playerCollider;
+        private PlayerMovement _movement;
         private Rigidbody _propBody;
 
-        /// <summary>붙는 순간 정해지는 로프 길이. 놓을 때까지 고정이다.</summary>
-        private float _holdDistance;
+        /// <summary>던지기까지 남은 대기 시간(초). <see cref="throwWindupDelay"/>에서 줄어든다.</summary>
+        private float _windupRemaining;
 
-        /// <summary>지난 스텝에 소품을 옮겨뒀던 자리. 이번 자리와의 차이가 곧 속도다.</summary>
-        private Vector3 _lastHoldTarget;
+        /// <summary>방금 던진 소품. 이게 남아있는 동안만 맞히면 체이스가 성립한다.</summary>
+        private Rigidbody _thrownBody;
 
-        /// <summary>매 스텝 갱신되는 "휘두른 속도". 놓는 순간 이 값을 그대로 던지는 속도로 쓴다.</summary>
-        private Vector3 _swingVelocity;
+        /// <summary>체이스 기회가 남은 시간(초). 0 이하가 되면 <see cref="_thrownBody"/>를 놓아준다.</summary>
+        private float _chaseWindowRemaining;
+
+        private static readonly int ThrowTriggerHash = Animator.StringToHash("ThrowTrigger");
+
+        /// <summary>Throw 레이어 인덱스. 클립을 안 채웠으면 -1로 남고 가중치 조작을 건너뛴다.</summary>
+        private int _throwLayerIndex = -1;
+        private float _throwWeightUntil;
 
         private void Awake()
         {
             _rb = GetComponent<Rigidbody>();
             _playerCollider = GetComponent<Collider>();
+            _movement = GetComponent<PlayerMovement>();
             if (gun == null) gun = GetComponent<GrappleGun>();
             if (aimCamera == null) aimCamera = Camera.main;
-            if (holdPoint == null && gun != null) holdPoint = gun.Muzzle;
+            if (animator == null) animator = GetComponentInChildren<Animator>();
+            if (animator != null) _throwLayerIndex = animator.GetLayerIndex("Throw");
 
-            if (holdPoint == null)
-                Debug.LogWarning("[WebGrabThrow] HoldPoint가 비어 있어 붙잡은 프롭이 따라다닐 자리가 없다.", this);
             if (_playerCollider == null)
                 Debug.LogWarning("[WebGrabThrow] 플레이어 콜라이더를 못 찾아 프롭과의 충돌을 못 끈다.", this);
+            if (throwAction == null)
+                Debug.LogWarning("[WebGrabThrow] Throw Action이 비어 있어 E로 잡아 던지는 동작이 안 된다.", this);
         }
 
         private void OnEnable()
         {
-            if (gun != null) gun.Detached += OnGunDetached;
+            if (throwAction == null) return;
+            throwAction.action.Enable();
+            throwAction.action.performed += OnThrowPerformed;
         }
 
         private void OnDisable()
         {
-            if (gun != null) gun.Detached -= OnGunDetached;
+            if (throwAction != null)
+            {
+                throwAction.action.performed -= OnThrowPerformed;
+                throwAction.action.Disable();
+            }
 
-            // 컴포넌트가 꺼지는 순간 쥐고 있던 것은 그냥 물리로 되돌린다. 던지는 것과
-            // 같은 취급을 하면 안 된다 — 조준 방향에 의미가 없는 상황이다.
-            if (IsHolding) ReleaseWithoutThrow();
-            SetIgnorePlayerCollision(_propBody, false);
-            _propBody = null;
+            // 대기 중이거나 체이스 중에 꺼지면 프롭을 정상 물리로 되돌린다.
+            if (IsWindingUp) CancelWindup();
+            if (IsChasing) EndChase(boost: false);
+
+            if (gun != null && gun.ChaseTarget == _thrownBody) gun.ChaseTarget = null;
+            _thrownBody = null;
         }
 
         /// <summary>
-        /// 붙잡은 프롭과 내 몸의 충돌 판정을 껐다 켠다.
-        ///
-        /// 로프 길이만큼 떨어뜨려 두는 지금 방식에서도 필요하다 — 스윙하며 몸이 크게
-        /// 움직이는 동안 붙잡은 소품과 스쳐 부딪힐 수 있는데, 들고 있는 물건이 주인 몸과
+        /// Throw 레이어 가중치를 켰다 끈다. <see cref="GrappleGun.UpdateFireLayerWeight"/>와
+        /// 같은 방식이다 — 매 프레임 무조건 돈다.
+        /// </summary>
+        private void Update()
+        {
+            if (animator == null || _throwLayerIndex < 0) return;
+            animator.SetLayerWeight(_throwLayerIndex, Time.time < _throwWeightUntil ? 1f : 0f);
+        }
+
+        /// <summary>
+        /// E를 눌렀다 — 크로스헤어 주변 소품을 잡고 대기 동작에 들어간다. 이미 뭔가
+        /// 대기·체이스 중이면 무시한다.
+        /// </summary>
+        private void OnThrowPerformed(InputAction.CallbackContext ctx)
+        {
+            if (IsWindingUp || IsChasing || _propBody != null) return;
+            if (gun == null || !gun.TryFindProp(out RaycastHit hit)) return;
+
+            var body = hit.collider.attachedRigidbody;
+            if (body == null || body.mass > maxGrabMass) return;   // 무거우면 손대지 않는다
+
+            BeginWindup(body);
+        }
+
+        /// <summary>
+        /// 매달린 프롭과 내 몸의 충돌 판정을 껐다 켠다. 잡고 있는 물건이 주인 몸과
         /// 충돌 판정을 갖는 게 애초에 이상하다.
         /// </summary>
         private void SetIgnorePlayerCollision(Rigidbody body, bool ignore)
@@ -117,130 +176,169 @@ namespace Momentum.Player
                 Physics.IgnoreCollision(_playerCollider, col, ignore);
         }
 
-        /// <summary>
-        /// 갈고리가 뭔가에서 떨어졌다는 신호 — 버튼을 놓았거나, 충돌로 강제로 끊겼거나.
-        ///
-        /// 붙잡고 있던 중이면 그게 곧 던지는 신호다.
-        /// </summary>
-        private void OnGunDetached()
-        {
-            if (IsHolding) Throw();
-            else
-            {
-                SetIgnorePlayerCollision(_propBody, false);
-                _propBody = null;
-            }
-        }
-
         private void FixedUpdate()
         {
-            // 새로 프롭에 붙은 순간을 잡는다. 매 스텝 다시 확인하는 이유는 붙는 시점이
-            // Update(입력)와 FixedUpdate(물리) 어느 쪽이 먼저 도는지 보장이 없어서다.
-            if (gun != null && gun.IsAttached && gun.IsPropAnchor && gun.AnchorBody != null
-                && _propBody == null && !IsHolding)
+            UpdateThrownTracking();
+
+            if (IsWindingUp)
             {
-                if (gun.AnchorBody.mass > maxGrabMass) return;   // 무거우면 손대지 않는다
-                BeginHold(gun.AnchorBody);
+                _windupRemaining -= Time.fixedDeltaTime;
+                if (_windupRemaining <= 0f) FinishWindup();
+                return;
             }
 
-            if (_propBody == null || !IsHolding) return;
-            HoldFollow();
+            // 방금 던진 그 소품에 좌클릭이 맞았는지를 본다 — 스윙/견인의 평소 조준과
+            // 같은 입력이지만, 결과(gun.AnchorBody)가 그 소품과 정확히 같을 때만 체이스로
+            // 받아들인다.
+            if (!IsChasing && gun != null && gun.IsAttached && gun.AnchorBody != null
+                && gun.AnchorBody == _thrownBody)
+            {
+                BeginChase();
+            }
+
+            if (IsChasing) UpdateChase();
         }
 
         /// <summary>
-        /// 붙잡기 시작한다 — 당겨오지 않고, 지금 거리를 로프 길이로 고정한 채 바로 든다.
+        /// 던진 소품의 "맞으면 체이스가 성립하는" 시한을 관리한다. 시간이 다 됐거나
+        /// 이미 착지해서 멈췄으면 놓아준다 — 안 그러면 안 쓰는 소품에 조준 보조
+        /// (<see cref="GrappleGun.ChaseTarget"/>)가 영원히 붙어 있는 이상한 상태가 된다.
         /// </summary>
-        private void BeginHold(Rigidbody body)
+        private void UpdateThrownTracking()
+        {
+            if (_thrownBody == null) return;
+
+            _chaseWindowRemaining -= Time.fixedDeltaTime;
+            bool settled = _thrownBody.linearVelocity.magnitude < chaseSettleSpeed;
+
+            if (_chaseWindowRemaining > 0f && !settled) return;
+
+            if (gun != null && gun.ChaseTarget == _thrownBody) gun.ChaseTarget = null;
+            _thrownBody = null;
+        }
+
+        /// <summary>
+        /// 대기 동작을 시작한다 — 프롭을 잠깐 그 자리에 고정해두고, 총을 숨기고, 던지기
+        /// 애니메이션을 재생한다. 실제로 속도가 실리는 건 <see cref="FinishWindup"/>에서다.
+        /// </summary>
+        private void BeginWindup(Rigidbody body)
         {
             _propBody = body;
+            IsWindingUp = true;
+            _windupRemaining = throwWindupDelay;
+
             SetIgnorePlayerCollision(_propBody, true);
-
-            float distance = holdPoint != null
-                ? Vector3.Distance(_propBody.position, holdPoint.position)
-                : minHoldDistance;
-            _holdDistance = Mathf.Clamp(distance, minHoldDistance, maxHoldDistance);
-
             _propBody.linearVelocity = Vector3.zero;
             _propBody.angularVelocity = Vector3.zero;
             _propBody.isKinematic = true;
 
-            _lastHoldTarget = holdPoint != null ? ComputeHoldTarget() : _propBody.position;
-            _swingVelocity = Vector3.zero;
+            if (gun != null) gun.SetVisible(false);
 
-            IsHolding = true;
+            if (animator != null)
+            {
+                animator.SetTrigger(ThrowTriggerHash);
+                _throwWeightUntil = Time.time + throwLayerHoldTime;
+            }
         }
 
         /// <summary>
-        /// 조준 카메라가 보는 방향. <b>손(<see cref="holdPoint"/>)의 방향이 아니라 이쪽을
-        /// 써야 한다</b> — 손의 방향은 팔 IK뿐 아니라 캐릭터 몸통 회전도 따라가는데,
-        /// 몸통은 마우스가 아니라 <b>키보드로 이동할 때(WASD로 이동 방향을 향해 도는 것)도
-        /// 돈다.</b> 손 방향으로 휘두른 속도를 재면 방향키만 눌러도 "휘두른 것"으로 잡혀
-        /// 던지는 힘이 실린다. 카메라는 이 게임에서 마우스로만 도므로, 여기 기준으로
-        /// 재야 진짜 "마우스로 휘둘렀는지"만 반영된다.
+        /// 취소한다 — 컴포넌트가 꺼지는 등, 던지기를 끝까지 못 갈 때만 쓴다. 물리로
+        /// 되돌릴 뿐 속도는 주지 않는다.
         /// </summary>
-        private Vector3 AimDirection => aimCamera != null ? aimCamera.transform.forward : transform.forward;
-
-        /// <summary>
-        /// 지금 조준 방향으로 로프 길이만큼 떨어진 목표 자리. 높이만 <see cref="minHoldHeightBelowPlayer"/>
-        /// 아래로는 못 내려가게 자른다 — 안 그러면 땅을 내려다볼 때 그 방향의 로프 길이
-        /// 끝이 바닥 밑이라, 키네마틱이라 충돌 없이 그대로 파묻혀버린다.
-        /// </summary>
-        private Vector3 ComputeHoldTarget()
+        private void CancelWindup()
         {
-            Vector3 target = holdPoint.position + AimDirection * _holdDistance;
-            float floor = _rb.position.y - minHoldHeightBelowPlayer;
-            target.y = Mathf.Max(target.y, floor);
-            return target;
+            IsWindingUp = false;
+            if (gun != null) gun.SetVisible(true);
+
+            if (_propBody != null)
+            {
+                SetIgnorePlayerCollision(_propBody, false);
+                _propBody.isKinematic = false;
+            }
+            _propBody = null;
         }
 
         /// <summary>
-        /// 조준 방향으로 로프 길이만큼 떨어진 자리를 계속 따라간다.
-        ///
-        /// 목표 자리를 직접 계산해서 그 이동량으로 속도를 기록하는 이유는, 키네마틱
-        /// Rigidbody의 <c>position</c>을 <c>MovePosition</c> 직후 바로 읽으면 아직 반영되기
-        /// 전이라 최신 값을 못 믿기 때문이다 — 우리가 계산한 목표값을 기준으로 직접
-        /// 재는 것이 정확하다.
+        /// 대기가 끝났다 — 총을 다시 보이게 하고, <b>내 현재 속도 + 조준 방향 × 던지는
+        /// 힘</b>을 그대로 대입해 던진다. 정지 상태로 던지면 <see cref="throwForce"/>뿐이라
+        /// 약하고, 스윙으로 가속한 채 던지면 그 속도가 고스란히 더해져 세다 —
+        /// <see cref="SwingConstraint"/>의 릴리즈 보상과 같은 원칙("관성이 그대로
+        /// 타격이 된다")을 던지기에도 그대로 적용한 것뿐이다.
         /// </summary>
-        private void HoldFollow()
+        private void FinishWindup()
         {
-            if (holdPoint == null) return;
+            IsWindingUp = false;
+            if (gun != null) gun.SetVisible(true);
 
-            Vector3 target = ComputeHoldTarget();
-            _swingVelocity = (target - _lastHoldTarget) / Time.fixedDeltaTime;
-            _lastHoldTarget = target;
-
-            _propBody.MovePosition(target);
-            _propBody.MoveRotation(Quaternion.LookRotation(AimDirection, Vector3.up));
-        }
-
-        /// <summary>
-        /// 놓는다 — 물리로 되돌리되 속도를 주지 않는다. 던지기가 아니라 취소하는 경로
-        /// (컴포넌트 비활성화 등)에서만 쓴다.
-        /// </summary>
-        private void ReleaseWithoutThrow()
-        {
-            if (_propBody != null) _propBody.isKinematic = false;
-            IsHolding = false;
-        }
-
-        /// <summary>
-        /// 던진다 — <b>휘두르며 쌓인 속도 + 조준 방향 × 던지는 힘</b>을 그대로 대입한다.
-        ///
-        /// 정지 상태로 놓으면(휘두른 속도가 거의 0) <see cref="throwForce"/>뿐이라 약하고,
-        /// 카메라를 세게 돌리며 놓으면 그 접선 속도가 고스란히 더해져 세다. 그동안
-        /// <c>isKinematic</c>이었으므로 물리 시뮬레이션이 임의로 값을 건드릴 일이 없어,
-        /// <see cref="HoldFollow"/>가 매 스텝 기록해둔 <see cref="_swingVelocity"/>를
-        /// 그대로 믿을 수 있다.
-        /// </summary>
-        private void Throw()
-        {
             SetIgnorePlayerCollision(_propBody, false);
             _propBody.isKinematic = false;
 
-            _propBody.linearVelocity = _swingVelocity + AimDirection * throwForce;
+            Vector3 aimDirection = aimCamera != null ? aimCamera.transform.forward : transform.forward;
+            _propBody.linearVelocity = _rb.linearVelocity + aimDirection * throwForce;
 
-            IsHolding = false;
+            // 던진 이 소품을 체이스 대상으로 등록한다 — 시한 안에 좌클릭이 맞으면
+            // 위 FixedUpdate의 체이스 감지 분기가 잡아챈다. GrappleGun에도 같이 알려서,
+            // 이 소품에 한해서는 조준이 후해지게 한다(GrappleGun.ChaseTarget 참고).
+            _thrownBody = _propBody;
+            _chaseWindowRemaining = chaseWindowDuration;
+            if (gun != null) gun.ChaseTarget = _thrownBody;
+
             _propBody = null;
+        }
+
+        /// <summary>
+        /// 던진 소품에 좌클릭이 맞았다 — 체이스 대시를 시작한다. 이 순간부터는 그
+        /// 소품이 아니라 <b>내가</b> 끌려간다.
+        /// </summary>
+        private void BeginChase()
+        {
+            IsChasing = true;
+            _thrownBody = null;
+            if (gun != null) gun.ChaseTarget = null;
+            if (_movement != null) _movement.SuspendHorizontalControl = true;
+        }
+
+        /// <summary>
+        /// <see cref="GrappleZip"/>과 같은 기법 — 힘이 아니라 속도를 목표 방향으로
+        /// 직접 대입한다. 대상이 건물이 아니라 날아가는 소품이라는 것만 다르다.
+        /// </summary>
+        private void UpdateChase()
+        {
+            if (gun == null || !gun.IsAttached)
+            {
+                EndChase(boost: false);
+                return;
+            }
+
+            Vector3 toTarget = gun.AnchorPoint - _rb.position;
+            if (toTarget.magnitude <= chaseArrivalDistance)
+            {
+                EndChase(boost: true);
+                return;
+            }
+
+            _rb.linearVelocity = toTarget.normalized * chaseSpeed;
+            if (_movement != null) _movement.SuspendHorizontalControl = true;
+        }
+
+        /// <summary>
+        /// 체이스를 끝낸다 — <see cref="GrappleZip.Stop"/>과 같은 릴리즈 원칙이다.
+        /// 도착했을 때만(<paramref name="boost"/>) 속도를 새로 쓴다.
+        /// </summary>
+        private void EndChase(bool boost)
+        {
+            IsChasing = false;
+            if (_movement != null) _movement.SuspendHorizontalControl = false;
+            if (gun != null) gun.ForceDetach();
+
+            if (!boost) return;
+
+            Vector3 velocity = _rb.linearVelocity;
+            Vector3 horizontal = new Vector3(velocity.x, 0f, velocity.z);
+            Vector3 direction = horizontal.sqrMagnitude > 0.0001f ? horizontal.normalized : transform.forward;
+            float speed = Mathf.Max(horizontal.magnitude, chaseExitSpeed);
+
+            _rb.linearVelocity = direction * speed + Vector3.up * chaseExitUpSpeed;
         }
     }
 }

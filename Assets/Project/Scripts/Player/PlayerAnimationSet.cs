@@ -82,5 +82,11 @@ namespace Momentum.Player
         [Tooltip("위 클립에서 실제로 움직일 부위만 켠 Avatar Mask. 다리까지 포함하면 " +
                  "걷는 중에 쏠 때 다리가 그 순간 멈추거나 어긋난다. 보통 오른팔(+상체) 정도만.")]
         public AvatarMask grappleFireMask;
+
+        [Header("웹 그랩 & 스로우 (소품 던지는 순간, 전신) — 비우면 던지기 레이어를 만들지 않는다")]
+        [Tooltip("WebGrabThrow가 소품을 던지는 순간 한 번 재생. 몸통까지 크게 쓰는 동작이라 " +
+                 "GrappleFire와 달리 마스크 없이 전신을 덮는다 — 던지는 그 순간만큼은 " +
+                 "이동 애니메이션과 안 섞여도 된다는 판단.")]
+        public AnimationClip throwProp;
     }
 }
