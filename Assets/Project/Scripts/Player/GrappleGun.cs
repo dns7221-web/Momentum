@@ -43,6 +43,12 @@ namespace Momentum.Player
                  "15m 이상이라 거리로 깨끗하게 갈린다.")]
         [Min(0f)][SerializeField] private float minAnchorDistance = 6f;
 
+        [Tooltip("소품 앵커에는 위 minAnchorDistance 대신 이 값을 쓴다. 건물용 값(6m)을 " +
+                 "소품에도 그대로 물리면, 옥상에 흩어둔 소품 대부분이 2~6m 안에 있어 " +
+                 "조준해도 안 붙는 사고가 난다 — '발밑 바닥'과 헷갈릴 소품은 없으므로 " +
+                 "짧게 둬도 된다.")]
+        [Min(0f)][SerializeField] private float minPropAnchorDistance = 1f;
+
         [Tooltip("나보다 이 각도만큼 아래인 앵커는 버린다. <b>느슨하게 두는 것이 맞다.</b> " +
                  "이 게임에서 가장 자주 쓰는 샷은 옥상 높이에서 앞 건물 꼭대기를 쏘는 것이라 " +
                  "앙각이 0° 근처이고, 크게 튀어 오른 뒤에는 주변이 전부 나보다 아래다. " +
@@ -397,13 +403,14 @@ namespace Momentum.Player
             // 소품은 건물이 아니다 — 옥상 올려붙이기·벽면 판정은 전부 건물 지오메트리를
             // 전제로 한 로직이라, 소품에 그대로 적용하면 맞은 자리가 아니라 소품의 바운즈
             // 위 허공으로 부착점이 튄다. 소품은 맞은 지점에 그대로 붙는다.
-            if (IsPropLayer(hit.collider.gameObject.layer)) return IsUsableAnchor(hit.point);
+            if (IsPropLayer(hit.collider.gameObject.layer))
+                return IsUsableAnchor(hit.point, minPropAnchorDistance);
 
             // 윗면을 맞았으면 그대로 쓴다. 벽면이면 그 위 옥상으로 올려본다.
-            if (hit.normal.y >= roofNormalMinY) return IsUsableAnchor(hit.point);
+            if (hit.normal.y >= roofNormalMinY) return IsUsableAnchor(hit.point, minAnchorDistance);
             if (TryLiftToRoof(ref hit)) return true;
 
-            return allowWallAnchors && IsUsableAnchor(hit.point);
+            return allowWallAnchors && IsUsableAnchor(hit.point, minAnchorDistance);
         }
 
         private bool IsPropLayer(int layer) => (propMask.value & (1 << layer)) != 0;
@@ -442,7 +449,7 @@ namespace Momentum.Player
                 Vector3 candidate = top + outward * (roofEdgeOffset + step * ClearanceStep);
 
                 // 멀어질수록 사거리 밖으로 나간다. 거기서 끊는 것이 맞다 — 더 밀어봐야 못 붙는다.
-                if (!IsUsableAnchor(candidate)) return false;
+                if (!IsUsableAnchor(candidate, minAnchorDistance)) return false;
                 if (IsHangBlocked(candidate)) continue;
 
                 hit.point = candidate;
@@ -482,12 +489,12 @@ namespace Momentum.Player
         /// 건물 꼭대기를 쏘는 것이라 앙각이 0° 근처이고, 릴리즈로 크게 솟은 뒤에는 주변이
         /// <b>전부 나보다 아래</b>다. 각도로는 "발밑 바닥"과 "앞 건물 꼭대기"를 가를 수 없다.
         /// </summary>
-        private bool IsUsableAnchor(Vector3 point)
+        private bool IsUsableAnchor(Vector3 point, float minDistance)
         {
             Vector3 toAnchor = point - transform.position;
 
             if (toAnchor.magnitude > maxRange) return false;
-            if (toAnchor.magnitude < minAnchorDistance) return false;
+            if (toAnchor.magnitude < minDistance) return false;
 
             float horizontal = new Vector2(toAnchor.x, toAnchor.z).magnitude;
 

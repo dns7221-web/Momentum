@@ -27,6 +27,19 @@ namespace Momentum.Player.EditorTools
         /// </summary>
         private const float AirIdleAirTimeThreshold = 0.25f;
 
+        /// <summary>
+        /// 히어로 착지(<c>SwingLandOnGround</c>)가 나오려면 이만큼 연속으로 공중이었어야 한다.
+        ///
+        /// <c>LandingSoon</c>(착지 예고)만으로 이 클립을 걸었을 때, 실측 로그에서 예고
+        /// 시간이 0.03~0.32초로 널뛰었다 — SphereCast가 물리 스텝 양자화·지형 요철에
+        /// 물리는 값이라 완벽하게 못 맞춘다. 화려한 자세를 <b>평소 착지의 기본값</b>으로
+        /// 쓰면 그 오차가 매번 티가 난다. 대신 체공 시간이 충분히 길었던(=진짜 크게
+        /// 떨어지거나 오래 스윙한) "특정 상황"에만 걸어서, 타이밍이 살짝 어긋나도 화려한
+        /// 연출 자체가 그 어색함을 가려주는 자리에서만 쓰기로 한다. 평범한 착지는
+        /// <c>Grounded</c> 하나로 예고 없이 확실하게 튼다(아래 <see cref="AddLandingTransitions"/>).
+        /// </summary>
+        private const float HeroLandingMinAirTime = 0.6f;
+
         /// <summary>공중 자세 변형 번호를 담는 파라미터. 빌더와 Picker가 같은 이름을 써야 한다.</summary>
         private const string AirVariantParameter = "AirVariant";
 
@@ -235,6 +248,17 @@ namespace Momentum.Player.EditorTools
                 // 다이빙 모션이 거의 끝날 때 공중 루프로 넘어간다. 변형이 여럿이면
                 // AirVariant가 가리키는 것 하나로만 간다.
                 LinkToAirLoops(diveState, airStates, exitTime: 0.9f);
+
+                // DiveStart에도 착지 탈출구를 놓는다. 기본 레이어는 스윙 중에도(안 보일
+                // 뿐) 계속 돌고 있어서, 스윙하며 실제로 하강하는 구간마다 Falling 조건을
+                // 만족해 DiveStart로 들어갈 수 있다. 이 상태를 만들 때는 "클립의 90%를
+                // 재생해야 다음으로 넘어간다"는 exitTime 전이 하나뿐이었는데, 그러면 하필
+                // 착지하는 순간 기본 레이어가 여기 가 있었을 때 — 스윙 레이어가 0으로
+                // 내려가 기본 레이어가 드러나도, 발은 이미 땅인데 DiveStart 클립이 끝날
+                // 때까지(그리고 AirLoop로 넘어갈 때까지) 계속 낙하 자세를 억지로 재생한다.
+                // 다른 공중 상태들과 똑같이 Grounded/히어로 조건으로 즉시 빠져나가게 한다 —
+                // hasExitTime이 없는 조건부 전이라 재생 진행률과 무관하게 그 프레임에 바로 먹힌다.
+                AddLandingTransitions(diveState, afterAir, swingLandState);
             }
             // "진짜 낙하로 확정됐을 때" 들어갈 곳. DiveStart가 있으면 거기, 없으면
             // 곧장 공중 루프/착지 단계로 — 위 afterDive와 같은 폴백 규칙이다.
@@ -252,12 +276,22 @@ namespace Momentum.Player.EditorTools
                 // 정확히 Falling이 시간+속도 문턱으로 이미 한 번 피해간 그 문제다. AirTime은
                 // PlayerMovement가 연속 공중 시간을 누적해 매 프레임 보내는 값이라, 한 스텝짜리
                 // blip은 이 문턱을 못 넘는다.
-                // <b>여기도 변형을 돌린다.</b> 원래는 airIdle 클립 하나만 걸었는데, 실제로
-                // 굴려보니 화면에 오래 보이는 자리가 AirLoop가 아니라 이쪽이었다 —
-                // AirLoop로 넘어가려면 Falling(시간 0.15초 + 하강 6m/s)을 통과해야 하는데
-                // 웬만한 점프·낙하는 그 전에 착지해버려서, 변형을 아무리 넣어도 계속
-                // AirIdle 한 동작만 보였다. 뽑기는 정상인데 그 결과가 안 보이는 자리에만
-                // 있었던 것이다.
+                // AirLoop 변형(airLoopVariants)을 다시 섞는다. 한 번 뺐다가(2026-08-05,
+                // 아래 사유) 다시 넣는 것이다.
+                //
+                // 뺐던 이유: 당시엔 SwingReleased가 이미 접지 중이어도 무조건 나갔고,
+                // DiveStart엔 착지 탈출구가 없었고, 스윙 레이어도 접지 중에 서서히만
+                // 내려갔다 — 그래서 "옥상에 가만히 서 있는데도", "이미 땅인데도" 화려한
+                // AirLoop 자세가 새어 나왔다. 그 세 가지를 전부 각자 자리에서 고쳤으므로
+                // (SwingConstraint.EndSwing의 접지 가드, DiveStart의 AddLandingTransitions,
+                // UpdateAnimator의 접지 스냅), 이 풀에 변형이 섞여 있어도 "엉뚱한 순간에
+                // 튀어나오는" 사고는 이제 각각의 그 자리에서 막힌다.
+                //
+                // 다시 넣는 이유: 도시가 건물로 빽빽해서, 릴리즈 뒤 <c>Falling</c>(시간
+                // 0.15초+하강 6m/s)을 확정 짓기 전에 착지하거나 다음 앵커를 다시 잡는
+                // 경우가 대부분이다 — 그러면 AirLoop_i(변형 4개)까지 갈 일이 거의 없어
+                // 실질적으로 늘 AirIdle(클립 1개) 하나만 보인다. 스윙을 자주 할수록 오히려
+                // 이 짧은 구간만 반복해서 보게 되므로, 변형을 보고 싶으면 여기 있어야 한다.
                 var airIdleClips = new List<AnimationClip> { set.airIdle };
                 foreach (var clip in set.AirLoopClips())
                     if (clip != null && !airIdleClips.Contains(clip)) airIdleClips.Add(clip);
@@ -356,15 +390,24 @@ namespace Momentum.Player.EditorTools
         /// 공중 상태에서 착지로 나가는 전이를 단다.
         ///
         /// 착지 종류가 둘이라 전이도 둘이다 — 스윙에서 내려온 것이면
-        /// <paramref name="swingLand"/>로, 그냥 떨어진 것이면 <paramref name="normalLand"/>로.
-        /// <b>스윙 쪽을 먼저 단다.</b> 유니티는 전이를 등록 순서대로 검사하므로, 조건이
-        /// 겹치는 두 전이 중 먼저 등록된 것이 이긴다 — 스윙 착지를 뒤에 달면 조건이 더
-        /// 느슨한 일반 착지에 항상 먹혀 영영 안 나온다.
+        /// <paramref name="swingLand"/>(히어로 착지)로, 그냥 떨어진 것이면
+        /// <paramref name="normalLand"/>(평범한 착지)로. <b>스윙 쪽을 먼저 단다.</b> 유니티는
+        /// 전이를 등록 순서대로 검사하므로, 조건이 겹치는 두 전이 중 먼저 등록된 것이 이긴다
+        /// — 히어로 착지를 뒤에 달면 조건이 더 느슨한 일반 착지에 항상 먹혀 영영 안 나온다.
         ///
-        /// 조건은 <c>Grounded</c>가 아니라 <c>LandingSoon</c>이다. <c>Grounded</c>는 발이
-        /// 실제로 닿은 뒤에야 참이 되므로, 그걸로 걸면 착지 클립이 착지 <b>후에</b> 시작해
-        /// 순서가 거꾸로 보인다. <c>LandingSoon</c>은 PlayerMovement가 낙하 속도에 맞춰
-        /// 발밑을 미리 레이로 재서, 닿기 일정 시간 전에 미리 켠다.
+        /// <b>둘의 타이밍 전략이 다르다.</b>
+        /// <list type="bullet">
+        /// <item><b>히어로 착지</b>는 <c>LandingSoon</c>(착지 예고) + <c>SwingLanding</c> +
+        ///       체공 시간이 <see cref="HeroLandingMinAirTime"/>을 넘었을 때만 나온다.
+        ///       예고가 착지 전에 미리 켜져야 자세가 다 형성된 채로 발이 닿는데, 실측해보니
+        ///       <c>LandingSoon</c>의 실제 예고 시간이 SphereCast·물리 스텝 오차로
+        ///       0.03~0.32초까지 널뛴다. 이 불안정을 완전히 없앨 수 없으니, 대신 "진짜 크게
+        ///       뜬 특정 상황"에만 걸어 다소 어긋나도 화려한 연출 자체가 그 어색함을
+        ///       가리게 한다</item>
+        /// <item><b>평범한 착지</b>는 예고 없이 <c>Grounded</c> 하나로 튼다. 발이 실제로
+        ///       닿은 <b>뒤에</b> 시작해도 어색하지 않은 자세라, 정확한 타이밍이 필요한
+        ///       예고 시스템에 기댈 이유가 없다 — 이쪽은 항상 확실하게 걸린다</item>
+        /// </list>
         /// </summary>
         private static void AddLandingTransitions(AnimatorState from, AnimatorState normalLand,
                                                   AnimatorState swingLand)
@@ -376,12 +419,13 @@ namespace Momentum.Player.EditorTools
                 toSwingLand.duration = 0.1f;
                 toSwingLand.AddCondition(AnimatorConditionMode.If, 0f, "LandingSoon");
                 toSwingLand.AddCondition(AnimatorConditionMode.If, 0f, "SwingLanding");
+                toSwingLand.AddCondition(AnimatorConditionMode.Greater, HeroLandingMinAirTime, "AirTime");
             }
 
             var toGround = from.AddTransition(normalLand);
-            toGround.hasExitTime = false; // 체공 시간이 매번 다르므로 시간이 아니라 상태로 끊는다
+            toGround.hasExitTime = false;
             toGround.duration = 0.1f;
-            toGround.AddCondition(AnimatorConditionMode.If, 0f, "LandingSoon");
+            toGround.AddCondition(AnimatorConditionMode.If, 0f, "Grounded");
         }
 
         /// <summary>
@@ -516,12 +560,14 @@ namespace Momentum.Player.EditorTools
             // 쪽에만 오간다.
             if (set.airLoop != null)
             {
-                // 낙하 사슬(BuildFallChain)의 AirLoop_i와 같은 클립 목록·같은 AirVariant
-                // 파라미터를 공유한다. 여기서 새로 뽑지 않고 그 값을 그대로 읽는 이유는,
-                // "공중이지만 아직 확정 안 된 자세"와 "스윙에서 크게 솟은 자세"가 둘 다
-                // 같은 종류의 순간(아치를 벗어난 큰 공중 동작)이라는 판단을 이미 내려서다
-                // (NinjaAirLoop 자체가 원래 그 이유로 만든 재사용이다).
-                var ninjaClips = set.AirLoopClips();
+                // 예전엔 낙하 사슬(BuildFallChain)의 AirLoop_i와 같은 클립 목록(airLoop +
+                // 변형 3개)을 통째로 재사용했다 — "공중이지만 아직 확정 안 된 자세"와
+                // "스윙에서 크게 솟은 자세"가 같은 종류라는 판단이었다. 그런데 그 변형
+                // 3개(Floating·Head Spinning·Breakdance 1990)는 자유낙하용 화려한 곡예
+                // 동작이라, 아직 <b>줄에 매달린 채</b> 스윙 중인 상태에 섞이면 로프를 잡고
+                // 헤드스핀·브레이크댄스를 추는 꼴이 된다. NinjaAirLoop은 airLoop 하나만
+                // 쓴다 — 변형은 진짜로 로프를 놓은 뒤(낙하 사슬)에만 나온다.
+                var ninjaClips = new List<AnimationClip> { set.airLoop };
                 var ninjaStates = BuildVariantStates(stateMachine, ninjaClips, "NinjaAirLoop");
 
                 for (int i = 0; i < ninjaStates.Count; i++)

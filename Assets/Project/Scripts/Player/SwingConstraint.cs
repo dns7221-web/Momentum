@@ -82,13 +82,28 @@ namespace Momentum.Player
         [Tooltip("Swing 레이어 가중치가 오르내리는 속도(초당). 0이면 즉시 전환된다 — " +
                  "붙는 순간 자세가 뚝 끊겨서 대개 부자연스럽다.")]
         [Min(0f)][SerializeField] private float animLayerLerpSpeed = 8f;
-        [Tooltip("앵커보다 이만큼 위로 올라가면 스윙 자세 대신 닌자 점프 공중 자세를 " +
-                 "보여준다. 큰 감기 증폭이나 강한 펌프로 정상 아치를 넘어 튀어 올랐을 때를 " +
-                 "잡아내는 값이다.\n\n" +
-                 "기준이 월드 Y가 아니라 앵커인 이유는 도시 높이에 딸려가지 않게 하려는 것이다. " +
-                 "매달려 있는 동안 몸은 정의상 앵커보다 아래에 있으므로, 그 위로 올라갔다는 " +
-                 "사실 자체가 곧 '정상 아치를 벗어났다'는 뜻이다.")]
-        [SerializeField] private float highFlightAboveAnchor = 2f;
+        [Tooltip("이번 스윙을 붙잡은 순간의 높이보다 이만큼 위로 올라가면 스윙 자세 대신 " +
+                 "닌자 점프 공중 자세를 보여준다. 큰 감기 증폭이나 강한 펌프로 정상 아치를 " +
+                 "넘어 튀어 올랐을 때를 잡아내는 값이다.\n\n" +
+                 "기준을 앵커가 아니라 <b>붙는 순간의 내 높이</b>로 잡는다. 앵커 기준(고정 " +
+                 "절대값)이었을 때는 로프가 짧은 옥상↔옥상 스윙에서 문제가 났다 — 같은 2m가 " +
+                 "짧은 로프의 호(arc) 전체에서 차지하는 비중은 크고, 긴 로프에서는 작아서 " +
+                 "옥상 스윙은 평범하게만 움직여도 걸리고 고층 스윙은 진짜 비정상일 때만 " +
+                 "걸리는 식으로 로프 길이에 따라 엄격도가 달라졌다. 붙는 순간의 내 높이를 " +
+                 "기준으로 삼으면 로프 길이·앵커 위치와 무관하게 항상 같은 뜻이 된다 — " +
+                 "\"펌프·감기로 에너지를 실제로 더 넣어 시작 높이보다 위로 올라갔다\".")]
+        [SerializeField] private float highFlightAboveStart = 2f;
+
+        [Tooltip("HighFlight가 켜지고 꺼질 때마다 그 순간의 높이차·RopeLength를 콘솔에 " +
+                 "찍는다. 지금 보이는 공중 자세가 정말 이 값 때문인지, 아니면 다른 자리에서 " +
+                 "나오는 건지 가릴 때 켤 것. 확인 끝나면 꺼둘 것.")]
+        [SerializeField] private bool logHighFlight = false;
+        private bool _prevHighFlight;
+
+        [Tooltip("접지 중이라 스윙 레이어 가중치를 즉시 0으로 스냅시킬 때마다 그 직전 " +
+                 "가중치를 콘솔에 찍는다. 0에 가까웠으면 이미 거의 안 보이던 상태였다는 " +
+                 "뜻이고, 1에 가까웠으면 이 스냅이 실제로 자세를 확 바꿔준 것이다.")]
+        [SerializeField] private bool logGroundSnap = false;
 
         [Header("스윙 자세 — 몸을 로프에 맞춰 기울인다")]
         [Tooltip("기울일 대상. 비워두면 Animator가 붙은 트랜스폼을 쓴다 — 그게 곧 캐릭터 " +
@@ -137,6 +152,9 @@ namespace Momentum.Player
 
         /// <summary>붙은 순간의 길이. 그보다 길게 풀지는 못한다.</summary>
         private float _maxLength;
+
+        /// <summary>붙은 순간의 월드 Y. <c>HighFlight</c> 판정의 기준선이다.</summary>
+        private float _swingStartHeight;
 
         // ─── 애니메이션 ───
         //
@@ -259,16 +277,30 @@ namespace Momentum.Player
         /// 가중치가 뚝 0으로 끊기지 않고 <c>animLayerLerpSpeed</c>를 따라 서서히 걷기 자세로
         /// 녹아든다. 그래서 <see cref="UpdateReelInput"/>과 달리 <c>_swinging</c> 여부로
         /// 통째로 리턴하지 않는다.
+        ///
+        /// <b>단, 이미 땅에 서 있으면 예외다.</b> 이 레이어는 Override라 가중치가 남아 있는
+        /// 동안은 기본 레이어가 무엇을 하든(착지 애니메이션으로 이미 전환됐어도) 전부
+        /// 가린다. 빠르게 스윙하다 땅에 부딪혀 <see cref="OnCollisionEnter"/>로 강제
+        /// 릴리즈되면, 부딪히는 그 순간 이 레이어가 <c>NinjaAirLoop</c>를 보여주고 있었을
+        /// 수 있는데 — 페이드가 <c>animLayerLerpSpeed</c>를 그대로 따르면 발이 이미 땅에
+        /// 닿은 뒤로도 최대 0.125초(1/8초) 동안 그 공중 자세가 남아 보인다. 착지 애니메이션
+        /// 타이밍을 아무리 정확히 맞춰도 이 레이어가 안 비켜주면 소용없으므로, 접지 중에는
+        /// 서서히가 아니라 즉시 0으로 내린다.
         /// </summary>
         private void UpdateAnimator()
         {
             if (_animator == null || _swingLayerIndex < 0) return;
 
-            float targetWeight = _swinging ? 1f : 0f;
+            bool grounded = _movement != null && _movement.IsGrounded;
+            float targetWeight = _swinging && !grounded ? 1f : 0f;
             float current = _animator.GetLayerWeight(_swingLayerIndex);
-            float next = animLayerLerpSpeed <= 0f
+            float next = grounded || animLayerLerpSpeed <= 0f
                 ? targetWeight
                 : Mathf.MoveTowards(current, targetWeight, animLayerLerpSpeed * Time.deltaTime);
+
+            if (logGroundSnap && grounded && current > 0.01f && next <= 0.01f)
+                Debug.Log($"[SwingConstraint] 접지 스냅 — 직전 가중치 {current:F2} → 0", this);
+
             _animator.SetLayerWeight(_swingLayerIndex, next);
 
             // 감고 있지 않을 때 목표 길이를 향해 실제 길이가 아직 줄어드는 중이면 그게 곧
@@ -282,11 +314,22 @@ namespace Momentum.Player
             // 건물을 겹으로 쌓아 옥상이 70m가 되는 순간 그 전제가 깨진다 — 정상 스윙이 내내
             // 문턱 위에 있어 공중 자세가 상시로 나온다.
             //
-            // 기준을 앵커로 옮기면 도시 높이가 얼마든 성립한다. 로프에 매달린 몸은 정의상
-            // 앵커보다 아래에 있으므로, 그 위로 올라갔다는 것 자체가 아치를 벗어났다는 뜻이다.
-            bool highFlight = _swinging && gun != null &&
-                              _rb.position.y >= gun.AnchorPoint.y + highFlightAboveAnchor;
+            // 그다음엔 기준을 앵커로 옮겼는데(앵커 + 2m), 이번엔 로프 길이에 따라 엄격도가
+            // 달라졌다 — 옥상↔옥상처럼 로프가 짧으면 같은 2m이 호 전체에서 차지하는 비중이
+            // 커서 평범하게 스윙만 해도 걸렸다. 기준을 <b>붙는 순간의 내 높이</b>로 옮기면
+            // 로프 길이·앵커 위치와 무관해진다 — 펌프·감기로 진짜 에너지를 더 넣어야만
+            // 시작 높이를 넘어서므로.
+            bool highFlight = _swinging &&
+                              _rb.position.y >= _swingStartHeight + highFlightAboveStart;
             _animator.SetBool(HighFlightHash, highFlight);
+
+            if (logHighFlight && highFlight != _prevHighFlight)
+            {
+                Debug.Log($"[SwingConstraint] HighFlight {(highFlight ? "ON" : "OFF")} — " +
+                          $"높이차={_rb.position.y - _swingStartHeight:F2}m " +
+                          $"(문턱 {highFlightAboveStart}m) · RopeLength={RopeLength:F1}m", this);
+            }
+            _prevHighFlight = highFlight;
         }
 
         /// <summary>
@@ -482,6 +525,7 @@ namespace Momentum.Player
         private void BeginSwing()
         {
             _swinging = true;
+            _swingStartHeight = _rb.position.y;
             RopeLength = Mathf.Max(minRopeLength, Vector3.Distance(_rb.position, gun.AnchorPoint));
 
             // 붙은 길이가 곧 최대 길이다. 그보다 길게 풀 수 있으면 앵커에 붙은 의미가 없어진다.
@@ -556,7 +600,15 @@ namespace Momentum.Player
             // 등)와 무관하게, 스윙이 끝났다는 사실 자체는 항상 알려야 SwingLand 클립이
             // (있다면) 놓친 적 없이 재생된다.
             _animator?.SetTrigger(SwingEndedHash);    // 스윙 레이어 — SwingLand
-            _animator?.SetTrigger(SwingReleasedHash); // 기본 레이어 — AirIdle
+
+            // 기본 레이어 — AirIdle. <b>이미 땅에 서 있으면 쏘지 않는다.</b> 옥상 위처럼
+            // 애초에 접지 상태에서 붙였다 바로 놓는 경우(붙자마자 취소·같은 자리 재포착
+            // 등)까지 이 트리거가 무조건 나가면, Any State가 그 즉시 AirIdle로 끌고 가
+            // 착지 전이가 되돌리기 전까지 한두 프레임 그 자세가 스친다 — 발이 땅에 붙어
+            // 있는데 공중 자세가 보이는 원인이 이것이었다. 진짜로 공중에서 놓았을 때만
+            // 필요한 신호이므로, 접지 중이면 애초에 쏘지 않는 것이 맞다.
+            if (_movement == null || !_movement.IsGrounded)
+                _animator?.SetTrigger(SwingReleasedHash);
 
             if (!boost || releaseUpFraction <= 0f) return;
 

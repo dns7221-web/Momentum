@@ -40,9 +40,10 @@ namespace Momentum.Player
                  "예고한다. 낙하 속도가 빠를수록 같은 시간이라도 더 먼 거리를 본다.")]
         [Min(0f)][SerializeField] private float landingAnticipationTime = 0.2f;
 
-        [Tooltip("착지 예측 레이가 맞는 레이어. 땅과 건물 옥상 둘 다 있어야 한다 — 옥상 " +
-                 "착지도 미리 예고돼야 하므로.")]
-        [SerializeField] private LayerMask groundCheckMask = ~0;
+        [Tooltip("착지 예측 스윕이 이 거리 안에서만 바닥을 찾는다. 시간 문턱 " +
+                 "(landingAnticipationTime)이 실제로 걸러주므로 넉넉히 두면 된다 — " +
+                 "너무 짧으면 빠른 낙하·스윙에서 그 안에 바닥을 못 찾아 예고가 아예 안 켜진다.")]
+        [Min(1f)][SerializeField] private float landingProbeMaxDistance = 40f;
 
         [Tooltip("접지 상태에서 이보다 작은 상향 속도는 매 스텝 0으로 지운다. " +
                  "인도 턱 같은 단차에서 depenetration이 얹는 잔여 튐을 지우기 위한 값이다.\n\n" +
@@ -80,6 +81,15 @@ namespace Momentum.Player
                  "한 번 눌러 한 줄만 뜨는데도 캐릭터가 떠오르면 원인은 코드가 아니라 " +
                  "Animator의 Apply Root Motion이다.")]
         [SerializeField] private bool logJumps = false;
+
+        [Tooltip("LandingSoon이 켜진 순간부터 실제 Grounded가 켜질 때까지 걸린 시간을 " +
+                 "콘솔에 찍는다. 히어로 랜딩이 착지 전에 미리 안 보이는 것 같을 때, 신호가 " +
+                 "너무 늦게 켜지는 건지 아니면 클립·전이 쪽 문제인지 가릴 때 켤 것.")]
+        [SerializeField] private bool logLandingSoon = false;
+        private float _landingSoonSetTime = -1f;
+        private float _landingSoonFirstSetTime = -1f;
+        private int _landingSoonFlipCount;
+        private bool _prevLandingSoon;
 
         [Header("카메라")]
         [Tooltip("비워두면 Camera.main을 자동으로 쓴다. 입력을 이 방향 기준으로 회전시킨다.")]
@@ -145,6 +155,13 @@ namespace Momentum.Player
 
         /// <summary>이번 물리 스텝에 바닥과 닿아 있는지. 충돌 콜백이 채운다.</summary>
         private bool _isGrounded;
+
+        /// <summary>
+        /// <see cref="_isGrounded"/>를 밖에 연다. <see cref="SwingConstraint"/>가 릴리즈
+        /// 순간 이미 땅에 서 있는지 판단할 때 쓴다 — 이미 접지 중이면 공중 자세(AirIdle)를
+        /// 강제로 씌울 이유가 없다.
+        /// </summary>
+        public bool IsGrounded => _isGrounded;
 
         /// <summary>연속으로 공중에 있던 시간. 착지하는 순간 즉시 0으로 되돌아간다.</summary>
         private float _airTime;
@@ -284,7 +301,24 @@ namespace Momentum.Player
                 _rb.linearVelocity = Vector3.zero;
             }
 
+            bool wasGrounded = _isGrounded;
             _isGrounded = _groundContact;
+            if (logLandingSoon && !wasGrounded && _isGrounded && _landingSoonSetTime >= 0f)
+            {
+                // [SweepTest 빌드] 태그를 넣어둔다 — 이 태그 없이 옛 로그 형식이 그대로
+                // 찍히면 새 코드가 아니라 옛 컴파일 결과가 도는 것이니 재컴파일부터 의심할 것.
+                //
+                // "마지막"과 "맨 처음" 켜진 시점을 같이 찍는다 — 깜빡였는지(flip 2회 이상)
+                // 가리기 위해서다. 둘이 다르면 착지 직전에 LandingSoon이 껐다 켜졌다 했다는
+                // 뜻이고, 애니메이션이 실제로 반응하는 건 "마지막" 쪽이라 그게 원래 재던 값이다.
+                Debug.Log($"[PlayerMovement][SweepTest 빌드] LandingSoon → Grounded: " +
+                          $"마지막 켜짐 기준 {Time.time - _landingSoonSetTime:F2}초, " +
+                          $"맨 처음 켜짐 기준 {Time.time - _landingSoonFirstSetTime:F2}초, " +
+                          $"깜빡인 횟수 {_landingSoonFlipCount}회 (예고 시간 {landingAnticipationTime}초)", this);
+                _landingSoonSetTime = -1f;
+                _landingSoonFirstSetTime = -1f;
+                _landingSoonFlipCount = 0;
+            }
             bool lowObstacle = _lowObstacleContact;
             // 다음 스텝의 충돌 콜백이 다시 채운다. 발이 떨어지면 아무도 안 채우므로 false로 남는다.
             _groundContact = false;
@@ -452,31 +486,80 @@ namespace Momentum.Player
         }
 
         /// <summary>
-        /// 착지가 곧 임박했는지 미리 잰다. "곧 임박"의 기준은 <b>거리가 아니라 시간</b>이다 —
-        /// 발밑으로 이만큼 먼 거리를 보는 게 아니라, <c>landingAnticipationTime</c>초 뒤에
-        /// 닿을 위치를 본다. 그래서 빠르게 떨어질수록(속도가 클수록) 같은 시간을 맞추려면
-        /// 더 먼 거리를 봐야 하고, 그게 그대로 레이 길이가 된다 — 낙하 속도와 무관하게
-        /// 항상 "닿기 약 0.2초 전"이라는 같은 타이밍에 신호가 켜진다.
+        /// 착지가 곧 임박했는지 미리 잰다. "곧 임박"의 기준은 <b>거리가 아니라 시간</b>이다.
+        ///
+        /// <b>짐작이 아니라 역산이다.</b> 예전엔 "0.2초 뒤 위치를 짐작 → 거기로 레이를
+        /// 쏴서 맞았는지 본다" 방식이었는데, 등속·수평 이동 같은 근사가 하나씩 늘어도
+        /// 실측(로그)에서 예고 시간이 0.03~0.32초로 계속 흔들렸다. 이 게임의 낙하 자세는
+        /// 몸 전체가 앞으로 기울어 바닥을 보는 다이빙 포즈라, 발밑만 보는 근사로는
+        /// 애초에 "지금 정말 향하고 있는 곳"과 어긋나기 쉽다.
+        ///
+        /// 그래서 순서를 뒤집는다 — <b>먼저 실제 거리를 재고, 그 거리에서 도달 시간을
+        /// 역산한다.</b> <see cref="Rigidbody.SweepTest"/>(유니티 내장)로 지금 속도 방향
+        /// 그대로 캡슐을 밀어봤을 때 처음 걸리는 지점까지의 진짜 거리를 얻는다 — 캡슐
+        /// 반지름·바운즈를 손으로 재구성할 필요가 없고, 실제 붙어 있는 콜라이더 모양을
+        /// 그대로 쓴다. 그 거리에서 <b>수직 낙하 성분</b>만 뽑아 등가속도 공식
+        /// <c>h = v·t + ½·g·t²</c>를 <b>t에 대해 직접 푼다</b>(이차방정식 해) — 짐작해서
+        /// 맞았는지 확인하는 게 아니라 정확한 도달 시각을 계산하므로, 낙하 초반이든
+        /// 막바지든 근사 오차가 낄 자리가 없다.
         ///
         /// 접지 중이거나 위로 가는 중에는 검사하지 않는다 — 착지를 예고할 이유가 없다.
         /// </summary>
         private void UpdateLandingAnticipation(Vector3 velocity)
         {
-            if (_isGrounded || velocity.y >= 0f || _capsule == null)
+            if (_isGrounded || velocity.y >= 0f)
             {
                 _animator?.SetBool(LandingSoonHash, false);
+                _prevLandingSoon = false;
                 return;
             }
 
-            float lookAhead = -velocity.y * landingAnticipationTime;
-            Vector3 origin = _capsule.bounds.center;
-            float castDistance = (_capsule.bounds.extents.y - _capsule.radius) + lookAhead;
+            Vector3 direction = velocity.normalized;
+            bool landingSoon = false;
 
-            bool landingSoon = Physics.SphereCast(
-                origin, _capsule.radius, Vector3.down,
-                out _, castDistance, groundCheckMask, QueryTriggerInteraction.Ignore);
+            if (_rb.SweepTest(direction, out RaycastHit hit, landingProbeMaxDistance,
+                               QueryTriggerInteraction.Ignore)
+                && Vector3.Angle(hit.normal, Vector3.up) <= maxSlopeAngle)
+            {
+                // 벽은 걸러낸다. 스윙 중 건물에 부딪혀 튕겨 나오는 순간처럼 velocity
+                // 방향에 벽면이 바짝 붙어 있으면, 그 벽까지의 거리가 아주 짧게 잡혀
+                // "착지가 임박했다"로 오판한다 — 바닥에 닿는 게 아니라 벽에 부딪힌
+                // 것뿐인데도 공중에서 히어로 랜딩이 튀어나오던 원인이 이것이다. 바닥이냐
+                // 벽이냐를 가르는 기준은 이 파일이 이미 쓰는 것(<see cref="maxSlopeAngle"/>,
+                // 충돌 콜백에서 접지 판정에 쓰는 것과 같은 값)을 그대로 재사용한다.
+                //
+                // hit.point는 부딪힌 쪽 표면 위의 점이라 캡슐 반지름만큼 어긋날 수 있다.
+                // 대신 "그 지점에 닿을 때까지 실제로 이동한 거리(hit.distance)"에서
+                // 수직 성분만 뽑는다 — 스윕 방향(velocity 방향)의 y 비율을 곱하면 된다.
+                float verticalDrop = hit.distance * -direction.y;
+
+                if (verticalDrop > 0f)
+                {
+                    float downSpeed = -velocity.y;
+                    float fallAcceleration = Mathf.Abs(Physics.gravity.y) * fallGravityMultiplier;
+
+                    // h = v·t + ½·g·t² 를 t에 대해 푼 근의 공식. fallAcceleration > 0이
+                    // 보장되므로(중력이 0일 순 없다) 분모 걱정은 없다.
+                    float discriminant = downSpeed * downSpeed + 2f * fallAcceleration * verticalDrop;
+                    float timeToImpact = (-downSpeed + Mathf.Sqrt(discriminant)) / fallAcceleration;
+
+                    landingSoon = timeToImpact <= landingAnticipationTime;
+                }
+            }
 
             _animator?.SetBool(LandingSoonHash, landingSoon);
+
+            if (logLandingSoon && landingSoon && !_prevLandingSoon)
+            {
+                // _landingSoonSetTime은 "가장 최근에 켜진 시점"이라 매번 덮어쓴다 — 착지
+                // 전이(AddLandingTransitions)가 실제로 반응하는 것도 그 최신 값이므로
+                // 애니메이션 타이밍과는 이게 맞다. 깜빡였는지 가리려고
+                // _landingSoonFirstSetTime은 이번 낙하의 <b>맨 처음</b> 켜진 시점만 남긴다.
+                _landingSoonSetTime = Time.time;
+                if (_landingSoonFlipCount == 0) _landingSoonFirstSetTime = Time.time;
+                _landingSoonFlipCount++;
+            }
+            _prevLandingSoon = landingSoon;
         }
 
         /// <summary>
