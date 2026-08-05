@@ -3,28 +3,22 @@ using UnityEngine;
 namespace Momentum.Player
 {
     /// <summary>
-    /// 웹 그랩 & 스로우 — 가벼운 프롭을 당겨와 쥐었다가, 조준해서 던진다.
+    /// 웹 그랩 & 스로우 — 원거리 소품을 붙잡아 휘둘러 던진다.
     ///
-    /// README <c>### 웹 공격 동작 설계</c>의 ④번 동작. 새 물리 시스템이 아니라 이미 있는
-    /// 두 가지 기법을 이어 붙인 것뿐이다.
-    /// <list type="number">
-    /// <item><b>당겨오기</b> — <see cref="GrappleZip"/>이 플레이어를 앵커로 끌어당길 때 쓰는
-    ///       "힘이 아니라 속도를 대입한다"는 기법을 그대로 프롭에 적용한다</item>
-    /// <item><b>쥐기</b> — 가까워지면 <c>Rigidbody.isKinematic = true</c>로 바꿔 물리 계산을
-    ///       끄고 손 위치만 따라가게 한다</item>
-    /// <item><b>던지기</b> — 갈고리가 놓이는 순간(<see cref="GrappleGun.Detached"/>)
-    ///       <c>isKinematic = false</c>로 되돌리고, 속도 = <b>내 현재 속도 + 조준 방향 ×
-    ///       던지는 힘</b>을 대입한다. 정지 상태로 던지면 약하고 전속력 스윙 중에 던지면
-    ///       세다 — 관성이 그대로 타격이 된다</item>
-    /// </list>
+    /// <b>몸까지 끌고 오지 않는다.</b> 원래는 손 앞까지 당겨와 쥐는 방식이었는데, 드럼통처럼
+    /// 큰 소품은 끌려오는 동안 캐릭터를 그대로 가려버렸다. 대신 붙는 순간의 거리를 로프
+    /// 길이로 고정하고, <b>그 길이만큼 떨어진 채로 조준 방향을 계속 따라다니게</b> 한다 —
+    /// 몸에 안 붙으니 가릴 것도 없다.
     ///
-    /// <b>당겨오는 동안에도 프롭은 계속 동적(Dynamic) 상태다.</b> 위치를 옮기는 게 아니라
-    /// 속도를 대입하는 것이라 물리 엔진의 충돌 처리를 그대로 통과한다 — 당겨오는 경로 위에
-    /// 다른 프롭 무더기가 있으면 <see cref="CombatProp"/>이 그 충돌을 그대로 잡아낸다.
-    /// README ②번(웹 얀크·관통)이 이 부수 효과만으로 이미 성립하는 이유다.
+    /// <b>"세게 휘둘렀는지"를 따로 계산하지 않는다.</b> 조준(카메라)이 도는 속도가 곧
+    /// 소품의 접선 속도다 — 원운동 공식 그대로(v = r·ω), 로프가 길수록 같은 회전에도
+    /// 더 빠르게 움직인다. 매 스텝 "따라가야 할 자리"를 계산해 그 이동량을 속도로 기록해
+    /// 두면, 마우스를 크게 휘두를수록 저절로 세게 던져진다 — 입력을 따로 해석할 필요가
+    /// 없다, 위치를 따라간 궤적 자체가 곧 속도다.
     ///
-    /// 무거운 프롭(<see cref="maxGrabMass"/> 초과)은 건드리지 않는다 — 그쪽은 리버스 얀크
-    /// (③, 아직 미구현) 몫이다.
+    /// <see cref="GrappleZip"/>·<see cref="SwingConstraint"/>과 같은 원칙 — 물리를 힘이
+    /// 아니라 속도 대입으로 다룬다. 붙잡는 동안은 <c>isKinematic</c>이라 물리 시뮬레이션
+    /// 밖에 있고, 놓는 순간에만 그동안 기록해둔 속도를 그대로 넘겨준다.
     /// </summary>
     [RequireComponent(typeof(Rigidbody), typeof(GrappleGun))]
     public class WebGrabThrow : MonoBehaviour
@@ -33,37 +27,51 @@ namespace Momentum.Player
         [Tooltip("앵커 판정을 빌려 쓴다. 비워두면 같은 오브젝트에서 찾는다.")]
         [SerializeField] private GrappleGun gun = null;
 
-        [Tooltip("쥔 프롭이 따라갈 위치. 손이나 가슴 앞에 빈 오브젝트를 만들어 끼운다. " +
-                 "비워두면 GrappleGun의 Muzzle을 그대로 쓴다.")]
+        [Tooltip("소품이 따라다닐 기준점. 비워두면 GrappleGun의 Muzzle을 그대로 쓴다 — " +
+                 "로프가 그려지는 자리와 같아야 부자연스럽지 않다.")]
         [SerializeField] private Transform holdPoint = null;
 
         [Tooltip("조준 기준 카메라. 비워두면 Camera.main을 쓴다.")]
         [SerializeField] private Camera aimCamera = null;
 
         [Header("무게 상한")]
-        [Tooltip("이보다 무거운 프롭은 잡지 않는다 — 로프는 붙어도 당겨오지 않는다. " +
+        [Tooltip("이보다 무거운 프롭은 잡지 않는다 — 로프는 붙어도 붙잡지 않는다. " +
                  "무거운 쪽(차량 등)은 리버스 얀크가 따로 담당할 몫이다.")]
         [Min(0f)][SerializeField] private float maxGrabMass = 50f;
 
-        [Header("당겨오기")]
-        [Tooltip("프롭이 손을 향해 날아오는 속도(m/s). 플레이어를 당기는 GrappleZip의 " +
-                 "zipSpeed와 같은 기법 — 힘이 아니라 속도를 매 스텝 대입한다.")]
-        [Min(1f)][SerializeField] private float pullSpeed = 12f;
+        [Header("휘두르기 — 몸까지 끌고 오지 않고 로프 길이만큼 떨어진 채 조준을 따라다닌다")]
+        [Tooltip("붙는 순간의 실제 거리를 로프 길이로 쓰되, 이 범위로 자른다. 하한이 없으면 " +
+                 "가까이서 붙잡은 소품이 여전히 몸 근처에 남아 가릴 수 있고, 상한이 없으면 " +
+                 "멀리서 붙잡았을 때 팔이 안 닿을 듯 어색하게 멀리 떠 있게 된다.")]
+        [Min(0.5f)][SerializeField] private float minHoldDistance = 2f;
+        [Min(0.5f)][SerializeField] private float maxHoldDistance = 6f;
 
-        [Tooltip("손에서 이만큼 가까워지면 당겨오기를 끝내고 쥔 것으로 본다.")]
-        [Min(0.1f)][SerializeField] private float grabDistance = 1.2f;
+        [Tooltip("따라다니는 자리가 내 위치보다 이만큼 아래로는 못 내려간다.\n\n" +
+                 "목표 자리는 '조준 방향으로 로프 길이만큼'인데, 카메라가 땅을 보면 그 " +
+                 "방향의 로프 길이 끝은 바닥 밑이다. 키네마틱이라 충돌 없이 그 자리로 그냥 " +
+                 "이동해버려 소품이 바닥에 파묻혀 사라진다 — 높이만 이 값으로 잘라서 막는다.")]
+        [Min(0f)][SerializeField] private float minHoldHeightBelowPlayer = 1f;
 
         [Header("던지기")]
-        [Tooltip("조준 방향으로 얹는 속도(m/s). 여기에 내 현재 속도가 그대로 더해진다 — " +
-                 "정지 상태로 던지면 이 값이 전부고, 스윙 중에 던지면 그만큼 더 세다.")]
-        [Min(0f)][SerializeField] private float throwForce = 22f;
+        [Tooltip("놓는 순간 조준 방향으로 더 얹는 속도(m/s). 0이어도 휘두른 속도만으로 " +
+                 "던져지지만, 가만히 서서 놓아도 최소한의 힘은 실리도록 기본값을 둔다.")]
+        [Min(0f)][SerializeField] private float throwForce = 8f;
 
-        /// <summary>지금 뭔가를 쥐고 있는가.</summary>
+        /// <summary>지금 뭔가를 붙잡아 휘두르고 있는가.</summary>
         public bool IsHolding { get; private set; }
 
         private Rigidbody _rb;
         private Collider _playerCollider;
         private Rigidbody _propBody;
+
+        /// <summary>붙는 순간 정해지는 로프 길이. 놓을 때까지 고정이다.</summary>
+        private float _holdDistance;
+
+        /// <summary>지난 스텝에 소품을 옮겨뒀던 자리. 이번 자리와의 차이가 곧 속도다.</summary>
+        private Vector3 _lastHoldTarget;
+
+        /// <summary>매 스텝 갱신되는 "휘두른 속도". 놓는 순간 이 값을 그대로 던지는 속도로 쓴다.</summary>
+        private Vector3 _swingVelocity;
 
         private void Awake()
         {
@@ -74,10 +82,9 @@ namespace Momentum.Player
             if (holdPoint == null && gun != null) holdPoint = gun.Muzzle;
 
             if (holdPoint == null)
-                Debug.LogWarning("[WebGrabThrow] HoldPoint가 비어 있어 쥔 프롭을 들 위치가 없다.", this);
+                Debug.LogWarning("[WebGrabThrow] HoldPoint가 비어 있어 붙잡은 프롭이 따라다닐 자리가 없다.", this);
             if (_playerCollider == null)
-                Debug.LogWarning("[WebGrabThrow] 플레이어 콜라이더를 못 찾아 프롭과의 충돌을 못 끈다 — " +
-                                 "당겨오는 프롭이 몸에 부딪혀 튕겨 나갈 수 있다.", this);
+                Debug.LogWarning("[WebGrabThrow] 플레이어 콜라이더를 못 찾아 프롭과의 충돌을 못 끈다.", this);
         }
 
         private void OnEnable()
@@ -97,15 +104,11 @@ namespace Momentum.Player
         }
 
         /// <summary>
-        /// 당겨오는 프롭과 내 몸의 충돌 판정을 껐다 켠다.
+        /// 붙잡은 프롭과 내 몸의 충돌 판정을 껐다 켠다.
         ///
-        /// <b>이게 없으면 당겨오던 프롭이 몸에 부딪혀 폭발하듯 튕겨 나간다.</b> 매 물리
-        /// 스텝 프롭 속도를 손 쪽으로 강제로 대입하는데, 손 위치가 몸 바로 앞이라 도착하기
-        /// 전에 콜라이더끼리 먼저 겹친다. 그러면 물리 엔진은 겹친 만큼 서로 밀어내려 하는데,
-        /// 프롭 쪽 속도는 다음 스텝에 다시 손 쪽으로 강제 대입되어 버리니 그 반작용이 전부
-        /// <b>나</b>에게만 쌓인다 — 순간적으로 아주 빠르게 튕겨 나가는 버그의 정체다.
-        /// 쥐고 있는 동안(당겨오는 중 포함)은 아예 부딪히지 않게 막는 것이 맞다 — 들고 있는
-        /// 물건이 주인 몸과 충돌 판정을 갖는 게 애초에 이상하다.
+        /// 로프 길이만큼 떨어뜨려 두는 지금 방식에서도 필요하다 — 스윙하며 몸이 크게
+        /// 움직이는 동안 붙잡은 소품과 스쳐 부딪힐 수 있는데, 들고 있는 물건이 주인 몸과
+        /// 충돌 판정을 갖는 게 애초에 이상하다.
         /// </summary>
         private void SetIgnorePlayerCollision(Rigidbody body, bool ignore)
         {
@@ -117,9 +120,7 @@ namespace Momentum.Player
         /// <summary>
         /// 갈고리가 뭔가에서 떨어졌다는 신호 — 버튼을 놓았거나, 충돌로 강제로 끊겼거나.
         ///
-        /// 쥐고 있던 중이면 그게 곧 던지는 신호다. 아직 당겨오는 중이었다면 던질 게 없으니
-        /// 그냥 추적을 그만둔다 — 프롭은 그 순간 갖고 있던 속도를 그대로 유지한 채 날아간다,
-        /// 별도로 멈추거나 되돌리지 않는다.
+        /// 붙잡고 있던 중이면 그게 곧 던지는 신호다.
         /// </summary>
         private void OnGunDetached()
         {
@@ -139,66 +140,77 @@ namespace Momentum.Player
                 && _propBody == null && !IsHolding)
             {
                 if (gun.AnchorBody.mass > maxGrabMass) return;   // 무거우면 손대지 않는다
-                _propBody = gun.AnchorBody;
-
-                // 당겨오기 시작. 도착하기 전에 몸과 부딪혀 튕겨 나가는 것을 막는다 —
-                // SetIgnorePlayerCollision 주석 참고.
-                SetIgnorePlayerCollision(_propBody, true);
+                BeginHold(gun.AnchorBody);
             }
 
-            if (_propBody == null) return;
-
-            if (IsHolding) HoldFollow();
-            else PullTowardHold();
+            if (_propBody == null || !IsHolding) return;
+            HoldFollow();
         }
 
         /// <summary>
-        /// 프롭을 손 쪽으로 당긴다 — 힘이 아니라 속도를 대입한다.
-        ///
-        /// <see cref="GrappleZip"/>과 같은 이유다. 힘으로 끌면 중력과 겨루느라 궤적이 처져
-        /// 도착 시점이 예측되지 않는다. 속도 대입은 <b>여전히 동적 상태를 유지</b>하므로
-        /// 도중에 다른 프롭 무더기를 치면 정상적으로 충돌 처리된다(README ② 웹 얀크가 이
-        /// 부수 효과만으로 성립하는 이유).
+        /// 붙잡기 시작한다 — 당겨오지 않고, 지금 거리를 로프 길이로 고정한 채 바로 든다.
         /// </summary>
-        private void PullTowardHold()
+        private void BeginHold(Rigidbody body)
         {
-            if (holdPoint == null) return;
+            _propBody = body;
+            SetIgnorePlayerCollision(_propBody, true);
 
-            Vector3 toHold = holdPoint.position - _propBody.position;
-            float distance = toHold.magnitude;
+            float distance = holdPoint != null
+                ? Vector3.Distance(_propBody.position, holdPoint.position)
+                : minHoldDistance;
+            _holdDistance = Mathf.Clamp(distance, minHoldDistance, maxHoldDistance);
 
-            if (distance <= grabDistance)
-            {
-                BeginHold();
-                return;
-            }
-
-            _propBody.linearVelocity = toHold.normalized * pullSpeed;
-        }
-
-        /// <summary>
-        /// 쥔다 — 물리 계산을 끄고 위치만 손을 따라가게 한다.
-        ///
-        /// 코드 몇 줄로 끝나는 이유가 이것이다. 쥐고 있는 동안 물체는 물리 시뮬레이션에서
-        /// 완전히 빠지므로, 손과 물체 사이 관계를 구속으로 풀 필요가 없다.
-        /// </summary>
-        private void BeginHold()
-        {
-            IsHolding = true;
             _propBody.linearVelocity = Vector3.zero;
             _propBody.angularVelocity = Vector3.zero;
             _propBody.isKinematic = true;
+
+            _lastHoldTarget = holdPoint != null ? ComputeHoldTarget() : _propBody.position;
+            _swingVelocity = Vector3.zero;
+
+            IsHolding = true;
         }
 
         /// <summary>
-        /// 쥔 프롭이 손을 따라가게 한다. 키네마틱 강체는 transform이 아니라
-        /// <c>MovePosition</c>으로 옮겨야 다음 스텝의 보간·충돌 판정이 정확하다.
+        /// 조준 카메라가 보는 방향. <b>손(<see cref="holdPoint"/>)의 방향이 아니라 이쪽을
+        /// 써야 한다</b> — 손의 방향은 팔 IK뿐 아니라 캐릭터 몸통 회전도 따라가는데,
+        /// 몸통은 마우스가 아니라 <b>키보드로 이동할 때(WASD로 이동 방향을 향해 도는 것)도
+        /// 돈다.</b> 손 방향으로 휘두른 속도를 재면 방향키만 눌러도 "휘두른 것"으로 잡혀
+        /// 던지는 힘이 실린다. 카메라는 이 게임에서 마우스로만 도므로, 여기 기준으로
+        /// 재야 진짜 "마우스로 휘둘렀는지"만 반영된다.
+        /// </summary>
+        private Vector3 AimDirection => aimCamera != null ? aimCamera.transform.forward : transform.forward;
+
+        /// <summary>
+        /// 지금 조준 방향으로 로프 길이만큼 떨어진 목표 자리. 높이만 <see cref="minHoldHeightBelowPlayer"/>
+        /// 아래로는 못 내려가게 자른다 — 안 그러면 땅을 내려다볼 때 그 방향의 로프 길이
+        /// 끝이 바닥 밑이라, 키네마틱이라 충돌 없이 그대로 파묻혀버린다.
+        /// </summary>
+        private Vector3 ComputeHoldTarget()
+        {
+            Vector3 target = holdPoint.position + AimDirection * _holdDistance;
+            float floor = _rb.position.y - minHoldHeightBelowPlayer;
+            target.y = Mathf.Max(target.y, floor);
+            return target;
+        }
+
+        /// <summary>
+        /// 조준 방향으로 로프 길이만큼 떨어진 자리를 계속 따라간다.
+        ///
+        /// 목표 자리를 직접 계산해서 그 이동량으로 속도를 기록하는 이유는, 키네마틱
+        /// Rigidbody의 <c>position</c>을 <c>MovePosition</c> 직후 바로 읽으면 아직 반영되기
+        /// 전이라 최신 값을 못 믿기 때문이다 — 우리가 계산한 목표값을 기준으로 직접
+        /// 재는 것이 정확하다.
         /// </summary>
         private void HoldFollow()
         {
             if (holdPoint == null) return;
-            _propBody.MovePosition(holdPoint.position);
-            _propBody.MoveRotation(holdPoint.rotation);
+
+            Vector3 target = ComputeHoldTarget();
+            _swingVelocity = (target - _lastHoldTarget) / Time.fixedDeltaTime;
+            _lastHoldTarget = target;
+
+            _propBody.MovePosition(target);
+            _propBody.MoveRotation(Quaternion.LookRotation(AimDirection, Vector3.up));
         }
 
         /// <summary>
@@ -212,19 +224,20 @@ namespace Momentum.Player
         }
 
         /// <summary>
-        /// 던진다 — <b>내 현재 속도 + 조준 방향 × 던지는 힘</b>을 그대로 대입한다.
+        /// 던진다 — <b>휘두르며 쌓인 속도 + 조준 방향 × 던지는 힘</b>을 그대로 대입한다.
         ///
-        /// 정지 상태로 던지면 <see cref="throwForce"/>뿐이라 약하고, 스윙으로 가속한 채
-        /// 던지면 그 속도가 고스란히 더해져 세다. 새 원칙이 아니라 <see cref="SwingConstraint"/>의
-        /// 릴리즈 보상과 같은 것 — "관성이 그대로 타격이 된다"를 던지기에도 적용한 것뿐이다.
+        /// 정지 상태로 놓으면(휘두른 속도가 거의 0) <see cref="throwForce"/>뿐이라 약하고,
+        /// 카메라를 세게 돌리며 놓으면 그 접선 속도가 고스란히 더해져 세다. 그동안
+        /// <c>isKinematic</c>이었으므로 물리 시뮬레이션이 임의로 값을 건드릴 일이 없어,
+        /// <see cref="HoldFollow"/>가 매 스텝 기록해둔 <see cref="_swingVelocity"/>를
+        /// 그대로 믿을 수 있다.
         /// </summary>
         private void Throw()
         {
             SetIgnorePlayerCollision(_propBody, false);
             _propBody.isKinematic = false;
 
-            Vector3 aimDirection = aimCamera != null ? aimCamera.transform.forward : transform.forward;
-            _propBody.linearVelocity = _rb.linearVelocity + aimDirection * throwForce;
+            _propBody.linearVelocity = _swingVelocity + AimDirection * throwForce;
 
             IsHolding = false;
             _propBody = null;

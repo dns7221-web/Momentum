@@ -49,6 +49,13 @@ namespace Momentum.Player
                  "짧게 둬도 된다.")]
         [Min(0f)][SerializeField] private float minPropAnchorDistance = 1f;
 
+        [Tooltip("소품을 찾는 레이는 점이 아니라 이 반지름의 구(SphereCast)로 쏜다. " +
+                 "건물은 커서 점 레이로도 잘 맞지만, 드럼통 같은 소품은 화면에서 차지하는 " +
+                 "면적이 작아 점으로 쏘면 스치듯 지나가기 쉽다 — 판정이 어렵다는 느낌의 " +
+                 "정체가 이것이다. 건물·벽면 판정(옥상 올려붙이기 포함)은 그대로 점 레이를 " +
+                 "쓴다 — 그쪽은 모서리 근처에서 구 캐스팅 결과가 애매해질 수 있어 손대지 않는다.")]
+        [Min(0f)][SerializeField] private float propAssistRadius = 0.6f;
+
         [Tooltip("나보다 이 각도만큼 아래인 앵커는 버린다. <b>느슨하게 두는 것이 맞다.</b> " +
                  "이 게임에서 가장 자주 쓰는 샷은 옥상 높이에서 앞 건물 꼭대기를 쏘는 것이라 " +
                  "앙각이 0° 근처이고, 크게 튀어 오른 뒤에는 주변이 전부 나보다 아래다. " +
@@ -392,25 +399,42 @@ namespace Momentum.Player
             return false;
         }
 
-        /// <summary>레이 하나를 쏘고 사거리·고도까지 전부 통과했는지 본다.</summary>
+        /// <summary>
+        /// 레이 하나를 쏘고 사거리·고도까지 전부 통과했는지 본다.
+        ///
+        /// 소품과 건물을 <b>따로</b> 쏜다. 소품을 먼저 <see cref="CastPropAnchor"/>(구 캐스팅)로
+        /// 찾아보고, 없으면 건물을 예전처럼 점 레이로 찾는다. 하나의 레이로 한 번에 처리하지
+        /// 않는 이유는 두 판정의 성격이 달라서다 — 소품은 두께를 줘서 후하게, 건물은 옥상
+        /// 올려붙이기·벽면 판정이 정확한 법선·지점을 요구해서 점 그대로 둬야 한다.
+        /// </summary>
         private bool CastAnchor(Vector3 origin, Vector3 direction, float distance, bool includeProps, out RaycastHit hit)
         {
-            int mask = includeProps ? anchorMask | propMask : anchorMask;
-            if (!Physics.Raycast(origin, direction, out hit, distance, mask,
+            if (includeProps && CastPropAnchor(origin, direction, distance, out hit))
+                return true;
+
+            if (!Physics.Raycast(origin, direction, out hit, distance, anchorMask,
                                  QueryTriggerInteraction.Ignore))
                 return false;
-
-            // 소품은 건물이 아니다 — 옥상 올려붙이기·벽면 판정은 전부 건물 지오메트리를
-            // 전제로 한 로직이라, 소품에 그대로 적용하면 맞은 자리가 아니라 소품의 바운즈
-            // 위 허공으로 부착점이 튄다. 소품은 맞은 지점에 그대로 붙는다.
-            if (IsPropLayer(hit.collider.gameObject.layer))
-                return IsUsableAnchor(hit.point, minPropAnchorDistance);
 
             // 윗면을 맞았으면 그대로 쓴다. 벽면이면 그 위 옥상으로 올려본다.
             if (hit.normal.y >= roofNormalMinY) return IsUsableAnchor(hit.point, minAnchorDistance);
             if (TryLiftToRoof(ref hit)) return true;
 
             return allowWallAnchors && IsUsableAnchor(hit.point, minAnchorDistance);
+        }
+
+        /// <summary>
+        /// 소품을 찾는다 — 점 레이가 아니라 <see cref="propAssistRadius"/> 반지름의
+        /// SphereCast다. 소품은 옥상 바닥과 달리 헷갈릴 상대가 없어 판정을 후하게 줘도
+        /// 안전하다 — "옥상 위에서 발밑을 잘못 잡는" 사고는 건물 쪽(점 레이) 얘기다.
+        /// </summary>
+        private bool CastPropAnchor(Vector3 origin, Vector3 direction, float distance, out RaycastHit hit)
+        {
+            if (!Physics.SphereCast(origin, propAssistRadius, direction, out hit, distance, propMask,
+                                    QueryTriggerInteraction.Ignore))
+                return false;
+
+            return IsUsableAnchor(hit.point, minPropAnchorDistance);
         }
 
         private bool IsPropLayer(int layer) => (propMask.value & (1 << layer)) != 0;
