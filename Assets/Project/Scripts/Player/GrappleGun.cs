@@ -122,6 +122,23 @@ namespace Momentum.Player
                  "클립 길이보다 조금 짧게 두면 자연스럽게 겹쳐 끊긴다 — 정확히 맞출 필요는 없다.")]
         [Min(0f)][SerializeField] private float fireLayerHoldTime = 0.4f;
 
+        [Header("소품 잡기 로프 처짐 — WebGrabThrow가 소품을 물고 있는 동안(IsPropAnchor)만")]
+        [Tooltip("건물 스윙 로프는 팽팽한 직선 그대로 두고, 소품을 잡고 있을 때만 이 " +
+                 "세그먼트 수로 나눠 곡선을 그린다. 스윙 로프는 실제로 팽팽하니 직선이 " +
+                 "맞고, 잡고 있는 소품은 그냥 매달려 있을 뿐이라 처져야 자연스럽다.")]
+        [Min(2)][SerializeField] private int propRopeSegments = 12;
+
+        [Tooltip("소품 로프 중앙이 아래로 처지는 정도 — 로프 길이에 대한 비율.")]
+        [Range(0f, 0.5f)][SerializeField] private float propRopeSagFraction = 0.12f;
+
+        [Tooltip("내 이동 속도 중 로프 방향에 수직인 성분이 로프를 옆으로 얼마나 미는지. " +
+                 "0이면 처짐만 있고 움직임에 반응하지 않는다.")]
+        [Min(0f)][SerializeField] private float propRopeSwayPerSpeed = 0.05f;
+
+        [Tooltip("로프 쏠림이 속도 변화를 얼마나 빨리 따라가는지(초당 보간 계수). " +
+                 "낮추면 관성이 남아 더 물렁하게, 올리면 즉각적으로 반응한다.")]
+        [Min(0.1f)][SerializeField] private float propRopeSwaySmoothing = 6f;
+
         [Header("입력 (InputSystem_Actions.inputactions의 Player 맵에서 드래그)")]
         [SerializeField] private InputActionReference grappleAction = null;
 
@@ -220,6 +237,12 @@ namespace Momentum.Player
         private Transform _anchorTransform;
         private Vector3 _anchorLocalPoint;
 
+        /// <summary>소품 로프 처짐 계산에 쓰는 내 몸의 Rigidbody. 속도의 로프 수직 성분을 읽는다.</summary>
+        private Rigidbody _rb;
+
+        /// <summary>소품 로프의 옆 쏠림 — 매 프레임 목표값으로 서서히 보간해 관성을 흉내낸다.</summary>
+        private Vector3 _propRopeSway;
+
         /// <summary>컴포넌트를 처음 붙일 때 레이어 마스크를 채워둔다. 빈 마스크는 아무것도 안 맞는다.</summary>
         private void Reset()
         {
@@ -229,6 +252,7 @@ namespace Momentum.Player
 
         private void Awake()
         {
+            _rb = GetComponent<Rigidbody>();
             if (aimCamera == null) aimCamera = Camera.main;
             if (animator == null) animator = GetComponentInChildren<Animator>();
             if (visualRoot == null && muzzle != null) visualRoot = muzzle.parent != null ? muzzle.parent.gameObject : null;
@@ -702,9 +726,54 @@ namespace Momentum.Player
         {
             if (rope == null || muzzle == null) return;
 
+            // 건물 스윙 로프는 실제로 팽팽하니 직선이 맞다. 소품을 잡고 있을 때만
+            // 곡선으로 그려 "매달려서 처져 있다"는 무게감을 보여준다.
+            if (IsPropAnchor)
+            {
+                DrawSaggingRope(muzzle.position, target);
+                return;
+            }
+
             rope.positionCount = 2;
             rope.SetPosition(0, muzzle.position);
             rope.SetPosition(1, target);
+        }
+
+        /// <summary>
+        /// 소품을 붙잡고 있는 동안의 로프를 그린다 — 팽팽한 직선이 아니라, 중력으로
+        /// 아래로 처지고 내 이동 방향(로프에 수직인 성분)으로 옆으로 쏠리는 완만한
+        /// 곡선이다. 실제 로프 시뮬레이션은 아니고, 중간점들을 사인 곡선 가중치로
+        /// 밀어내는 정도의 눈속임이다 — 소품 하나 붙잡자고 버라이어티 로프 물리를
+        /// 새로 들일 이유는 없다.
+        /// </summary>
+        private void DrawSaggingRope(Vector3 start, Vector3 end)
+        {
+            int segments = Mathf.Max(2, propRopeSegments);
+            rope.positionCount = segments + 1;
+
+            Vector3 straight = end - start;
+            float length = straight.magnitude;
+            Vector3 along = length > 0.001f ? straight / length : transform.forward;
+
+            // 내 속도 중 로프 방향 성분을 빼면 "로프에 수직으로 미는 힘"만 남는다.
+            Vector3 velocity = _rb != null ? _rb.linearVelocity : Vector3.zero;
+            Vector3 lateralTarget = velocity - Vector3.Dot(velocity, along) * along;
+            _propRopeSway = Vector3.Lerp(_propRopeSway, lateralTarget * propRopeSwayPerSpeed,
+                                         1f - Mathf.Exp(-propRopeSwaySmoothing * Time.deltaTime));
+
+            float sagAmount = length * propRopeSagFraction;
+
+            for (int i = 0; i <= segments; i++)
+            {
+                float t = (float)i / segments;
+                float curve = Mathf.Sin(t * Mathf.PI); // 양 끝 0, 가운데서 최대.
+
+                Vector3 point = Vector3.Lerp(start, end, t);
+                point += Vector3.down * (sagAmount * curve);
+                point += _propRopeSway * curve;
+
+                rope.SetPosition(i, point);
+            }
         }
 
         private void SetRopeVisible(bool visible)

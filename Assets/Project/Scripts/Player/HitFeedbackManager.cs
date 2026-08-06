@@ -30,6 +30,11 @@ namespace Momentum.Player
         [SerializeField] private float minTimeScale = 0.05f;
         [Tooltip("히트스톱 유지 프레임/시간 (리얼 타임 초)")]
         [SerializeField] private float hitStopBaseDuration = 0.08f;
+        [Tooltip("히트스톱이 끝난 뒤 다음 히트스톱까지 최소 대기 시간(리얼 타임 초). " +
+                 "이게 없으면 소품 하나가 데굴데굴 구르며 계속 부딪힐 때마다 히트스톱이 " +
+                 "매번 다시 걸려서, Time.timeScale이 정상 속도로 돌아올 틈도 없이 슬로우모션이 " +
+                 "영원히 이어지는 문제가 생긴다.")]
+        [Min(0f)][SerializeField] private float hitStopCooldown = 0.15f;
 
         [Header("카메라 셰이크 (Cinemachine Impulse)")]
         [Tooltip("충돌 지점의 임펄스 소스. 비워두면 이 오브젝트에 자동으로 하나 붙인다.\n\n" +
@@ -43,6 +48,7 @@ namespace Momentum.Player
         private Coroutine _hitStopCoroutine;
         private float _preHitStopTimeScale = 1f;
         private bool _isHitStopActive = false;
+        private float _nextHitStopAllowedTime = 0f;
 
         private void Awake()
         {
@@ -74,18 +80,23 @@ namespace Momentum.Player
 
             float speedRatio = Mathf.Clamp01((relativeSpeed - minHitStopSpeed) / (maxHitStopSpeed - minHitStopSpeed));
 
-            // 1. 히트스톱 실행
-            float targetTimeScale = Mathf.Lerp(0.2f, minTimeScale, speedRatio);
-            float duration = hitStopBaseDuration * (1f + speedRatio * 0.5f);
-            ExecuteHitStop(targetTimeScale, duration);
+            // 1. 히트스톱 실행 — 쿨다운 중이면 건너뛴다. 소품이 데굴데굴 구르며 계속
+            // 부딪히면 매번 다시 걸려서 슬로우모션이 영원히 안 풀리는 문제가 있었다.
+            if (Time.unscaledTime >= _nextHitStopAllowedTime)
+            {
+                float targetTimeScale = Mathf.Lerp(0.2f, minTimeScale, speedRatio);
+                float duration = hitStopBaseDuration * (1f + speedRatio * 0.5f);
+                ExecuteHitStop(targetTimeScale, duration);
+                _nextHitStopAllowedTime = Time.unscaledTime + duration + hitStopCooldown;
+
+                Debug.Log($"[HitFeedback] 💥 고속 충돌! 상대속도: {relativeSpeed:F1} m/s | TimeScale: {targetTimeScale:F2}");
+            }
 
             // 2. 카메라 셰이크 — Cinemachine Impulse. 방향까지 실리므로 정면충돌과
-            // 스침이 다르게 흔들린다(velocity 인자가 임펄스의 방향·크기를 겸한다).
+            // 스침이 다르게 흔들린다(velocity 인자가 임펄스의 방향·크기를 겸한다). 쿨다운과
+            // 무관하게 매번 울린다 — 흔들림은 겹쳐도 자연스럽지만 슬로우모션은 안 그렇다.
             impulseSource.GenerateImpulseAtPositionWithVelocity(
                 hitPoint, Vector3.down * (relativeSpeed * impulseIntensityPerSpeed));
-
-            // 3. 디버그 로그
-            Debug.Log($"[HitFeedback] 💥 고속 충돌! 상대속도: {relativeSpeed:F1} m/s | TimeScale: {targetTimeScale:F2}");
         }
 
         private void ExecuteHitStop(float targetTimeScale, float realTimeDuration)
@@ -122,6 +133,17 @@ namespace Momentum.Player
             if (_isHitStopActive)
             {
                 Time.timeScale = _preHitStopTimeScale;
+            }
+        }
+
+        // 꺼지기만 하고 파괴되지는 않는 경우(예: 씬 전환 중 임시 비활성화)에도 코루틴이
+        // 조용히 멈추면서 Time.timeScale이 낮은 값에 갇힐 수 있어 OnDestroy와 똑같이 되돌린다.
+        private void OnDisable()
+        {
+            if (_isHitStopActive)
+            {
+                Time.timeScale = _preHitStopTimeScale;
+                _isHitStopActive = false;
             }
         }
     }
