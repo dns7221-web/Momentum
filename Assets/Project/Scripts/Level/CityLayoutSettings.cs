@@ -163,6 +163,17 @@ namespace Momentum.Level
                  "그보다 높은 인도와 광장 포장재에서 발이 15cm 파묻힌다.")]
         public bool surfaceColliders = true;
 
+        [Header("성능 — 소품 LOD 컬링")]
+        [Tooltip("옥상·광장 소품에 LODGroup을 붙여, 화면에서 차지하는 비중이 " +
+                 "propLodCullHeight 아래로 떨어지면(멀어지면) 렌더링·그림자 캐스팅을 " +
+                 "통째로 끈다. 이 키트 소품엔 저폴리 버전이 따로 없어 진짜 단계별 LOD는 " +
+                 "못 만들지만, 컬링만으로도 화면 기여도가 낮은 소품의 드로우콜·섀도우 " +
+                 "캐스터 수를 줄일 수 있다 — 도시가 커질수록(소품 수백~수천 개) 효과가 크다.")]
+        public bool propLodCulling = true;
+        [Tooltip("소품이 화면 높이의 이 비율 아래로 작아지면 컬링한다. 값을 올릴수록 " +
+                 "더 가까운 거리에서부터 사라져 더 싸지지만, 눈에 띄게 사라지는 게 보일 수 있다.")]
+        [Range(0.001f, 0.1f)] public float propLodCullHeight = 0.02f;
+
         [Header("껍데기 모드 — 터널링 검증용 (회색 박스에만 적용)")]
         [Tooltip("켜면 속 찬 큐브 대신 얇은 벽 4장 + 옥상으로 만든다. " +
                  "속 찬 큐브에서는 터널링이 관측되지 않으므로, 실제 건물로 교체하기 전에 " +

@@ -160,6 +160,14 @@ namespace Momentum.Player
             // 지상 이동이 매 스텝 수평 속도를 대입하므로, 막지 않으면 견인 속도가
             // 곧바로 지워진다. 스윙이 쓰는 것과 같은 스위치다.
             if (_movement != null) _movement.SuspendHorizontalControl = true;
+
+            // FixedUpdate를 기다리지 않고 여기서 바로 넘긴다. 우클릭 입력은 Update
+            // 타이밍에 처리되는데 그리기 목표는 지금까지 FixedUpdate에서만 넘겼다 —
+            // 그 사이 공백 프레임 동안은 IsAttached도 OverrideRopeTarget도 없어 로프가
+            // 안 그려진다. 건물벽처럼 가까운 목표는 견인 자체가 아주 짧게 끝나버려서,
+            // 그 공백 때문에 로프가 뜰 새도 없이 견인이 끝나 "거미줄이 아예 안 보인다"로
+            // 보였다.
+            if (gun != null) gun.OverrideRopeTarget = TargetPoint;
         }
 
         /// <summary>
@@ -253,6 +261,10 @@ namespace Momentum.Player
             float speed = Mathf.Max(horizontal.magnitude, exitSpeed);
 
             _rb.linearVelocity = direction * speed + Vector3.up * exitUpSpeed;
+
+            if (_movement != null && _movement.LogLift)
+                Debug.Log($"[띄움] 견인(zip) 도착 부스트 — y속도 {exitUpSpeed:F2} 대입, " +
+                          $"높이 {transform.position.y:F2}m", this);
         }
     }
 }

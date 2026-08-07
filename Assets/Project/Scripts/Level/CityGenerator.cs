@@ -277,6 +277,7 @@ namespace Momentum.Level
                     // 먼저인 이유는 없다 — 부착 순서 자체는 무관하다.
                     if (grabbableLayer >= 0) SetLayerRecursive(prop, grabbableLayer);
                     AddPhysicsToProp(prop);
+                    if (settings.propLodCulling) AddLodCulling(prop, settings.propLodCullHeight);
                     total++;
                 }
             }
@@ -497,6 +498,7 @@ namespace Momentum.Level
                         // 프롭과 같다.
                         if (grabbableLayer >= 0) SetLayerRecursive(prop, grabbableLayer);
                         AddPhysicsToProp(prop);
+                        if (settings.propLodCulling) AddLodCulling(prop, settings.propLodCullHeight);
                         props++;
                     }
                 }
@@ -847,6 +849,32 @@ namespace Momentum.Level
             // 화면에 보이는 위치가 어긋난다 — 가만히 있어야 할 것끼리 미세하게 계속
             // 파고들며 부딪히는 것처럼 보이던 증상이 이것이었다.
             prop.isStatic = false;
+        }
+
+        /// <summary>
+        /// 소품에 <see cref="LODGroup"/>을 붙여, 화면에서 차지하는 비중이
+        /// <paramref name="cullHeight"/> 아래로 떨어지면 렌더링·그림자 캐스팅을 통째로
+        /// 끈다. LOD 단계를 하나만(<c>LOD0</c>) 등록하면 유니티가 그 아래는 자동으로
+        /// "컬링"으로 처리한다 — 저폴리 대체 메시가 없어도 되는 이유다.
+        ///
+        /// 이 키트 소품엔 단계별 저폴리 메시가 따로 없어 진짜 LOD(멀어질수록 폴리곤이
+        /// 줄어드는 것)는 못 만든다. 대신 "충분히 작아지면 아예 안 그린다"만으로도
+        /// 도시처럼 소품이 수백~수천 개인 씬에서는 드로우콜·섀도우 캐스터 수가 크게
+        /// 줄어든다 — 특히 그림자는 컬링된 오브젝트에서 아예 안 나가니, Stats 패널의
+        /// Shadow Casters 수가 이 함수 하나로 직접 줄어드는 걸 확인할 수 있다.
+        /// </summary>
+        private static void AddLodCulling(GameObject prop, float cullHeight)
+        {
+            if (prop == null) return;
+
+            var renderers = prop.GetComponentsInChildren<Renderer>();
+            if (renderers.Length == 0) return;
+
+            var lodGroup = prop.GetComponent<LODGroup>();
+            if (lodGroup == null) lodGroup = prop.AddComponent<LODGroup>();
+
+            lodGroup.SetLODs(new[] { new LOD(cullHeight, renderers) });
+            lodGroup.RecalculateBounds();
         }
 
         /// <summary>

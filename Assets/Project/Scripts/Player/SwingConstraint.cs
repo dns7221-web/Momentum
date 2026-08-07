@@ -129,6 +129,13 @@ namespace Momentum.Player
         [Tooltip("몸의 방향이 목표를 따라가는 속도(초당 각도). 낮을수록 부드럽고 굼뜨다.")]
         [Min(1f)][SerializeField] private float facingTurnSpeedDegPerSec = 120f;
 
+        [Tooltip("몸의 '위'로 쓸 로프 방향의 최소 y 성분. 펌프로 크게 솟구쳐 앵커보다 높이 " +
+                 "올라가면 앵커 방향(toAnchor)이 아래를 가리키게 되어 몸이 통째로 뒤집혀 보인다 " +
+                 "— 영상으로 확인한 또 다른 바람 인형 증상이다(위 maxFacingTurn이 잡는 것은 " +
+                 "진행 방향이 반 바퀴 도는 것이고, 이건 축 자체가 뒤집히는 것이라 별개다). " +
+                 "0보다 확실히 큰 값으로 눌러두면 그 구간에서도 위가 아래를 향하는 일이 없다.")]
+        [Range(0.05f, 0.9f)][SerializeField] private float minSwingUpY = 0.15f;
+
         [Header("펌프 · 조종 (InputSystem_Actions ▸ Player ▸ Move, PlayerMovement와 같은 액션)")]
         [Tooltip("PlayerMovement가 켜고 끄는 액션을 그대로 참조만 한다 — 여기서 별도로 " +
                  "Enable/Disable하지 않는다. 둘 다 같은 Player 오브젝트에 있어 생명주기가 같다.")]
@@ -394,6 +401,15 @@ namespace Momentum.Player
 
             Vector3 up = toAnchor.normalized;
 
+            // 앵커보다 높이 솟구치면(하이 플라이트 등) toAnchor가 아래를 가리켜 up이 뒤집히고
+            // 몸이 순간적으로 거꾸로 보인다 — y 성분을 최솟값 아래로 못 내려가게 눌러서
+            // 막는다. 평소 스윙(y가 이미 그 이상)에는 전혀 영향이 없다.
+            if (up.y < minSwingUpY)
+            {
+                up.y = minSwingUpY;
+                up.Normalize();
+            }
+
             UpdateFacing(up);
 
             // 몸의 앞을 접선면에 눕힌다. 로프 방향과 직교해야 LookRotation이 안정적이다.
@@ -625,6 +641,10 @@ namespace Momentum.Player
             // ForceMode.VelocityChange는 질량을 무시하고 속도를 그대로 더한다. 질량을 1로
             // 두고 튜닝한 값이 나중에 질량을 바꾸는 순간 어긋나는 일을 여기서 미리 막는다.
             _rb.AddForce(Vector3.up * up, ForceMode.VelocityChange);
+
+            if (_movement != null && _movement.LogLift)
+                Debug.Log($"[띄움] 스윙 릴리즈 보상 — y속도 +{up:F2}, " +
+                          $"높이 {transform.position.y:F2}m", this);
 
             // 감기 증폭과 겹쳐 상한을 넘지 않게 한다 — maxSpeed는 설계값이 아니라 안전장치다.
             _rb.linearVelocity = Vector3.ClampMagnitude(_rb.linearVelocity, maxSpeed);

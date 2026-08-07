@@ -33,8 +33,12 @@ namespace Momentum.Player
         [Tooltip("히트스톱이 끝난 뒤 다음 히트스톱까지 최소 대기 시간(리얼 타임 초). " +
                  "이게 없으면 소품 하나가 데굴데굴 구르며 계속 부딪힐 때마다 히트스톱이 " +
                  "매번 다시 걸려서, Time.timeScale이 정상 속도로 돌아올 틈도 없이 슬로우모션이 " +
-                 "영원히 이어지는 문제가 생긴다.")]
-        [Min(0f)][SerializeField] private float hitStopCooldown = 0.15f;
+                 "영원히 이어지는 문제가 생긴다. 그랩 앤 슬램(V)으로 소품을 세게 던졌을 때 " +
+                 "주변 소품들에 연쇄로 부딪히며 이 문제가 재현된 적이 있다 — 0.15초로는 " +
+                 "연쇄 충돌 간격보다 짧아서 다 못 막았다. 인스펙터에 이미 저장된 값이라 " +
+                 "이 기본값을 바꿔도 씬의 HitFeedbackManager 오브젝트에는 반영 안 된다, " +
+                 "직접 올려서 테스트해볼 것.")]
+        [Min(0f)][SerializeField] private float hitStopCooldown = 0.4f;
 
         [Header("카메라 셰이크 (Cinemachine Impulse)")]
         [Tooltip("충돌 지점의 임펄스 소스. 비워두면 이 오브젝트에 자동으로 하나 붙인다.\n\n" +
@@ -49,6 +53,17 @@ namespace Momentum.Player
         private float _preHitStopTimeScale = 1f;
         private bool _isHitStopActive = false;
         private float _nextHitStopAllowedTime = 0f;
+
+        /// <summary>
+        /// 켜져 있는 동안은 <see cref="TriggerHitFeedback"/>이 통째로 무시된다. 손으로
+        /// 소품을 붙잡아 끌고 다니는 동안(WebGrabThrow), 그 소품이 주변 다른 소품을
+        /// 스치면 그게 다시 옆의 소품을 치는 식으로 연쇄가 번져 히트스톱이 초당 여러 번
+        /// 재발동하고 TimeScale이 거의 계속 바닥에 눌려 있는 문제가 있었다 — 부딪힌
+        /// 상대 하나하나를 가려내는 대신, "지금 뭔가를 손으로 붙잡고 있다" 동안은
+        /// 이 피드백 자체를 아예 꺼버리는 쪽이 훨씬 단순하고 확실하다. 던지거나 놓는
+        /// 순간 바로 꺼서(false) 정상적인 타격 피드백은 그대로 산다.
+        /// </summary>
+        public bool SuppressFeedback { get; set; }
 
         private void Awake()
         {
@@ -73,6 +88,8 @@ namespace Momentum.Player
         /// <param name="hitPoint">충돌 발생 위치</param>
         public void TriggerHitFeedback(float relativeSpeed, Vector3 hitPoint)
         {
+            if (SuppressFeedback) return;
+
             if (relativeSpeed < minHitStopSpeed)
             {
                 return;

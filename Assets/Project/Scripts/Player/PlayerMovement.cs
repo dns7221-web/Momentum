@@ -86,6 +86,18 @@ namespace Momentum.Player
                  "콘솔에 찍는다. 히어로 랜딩이 착지 전에 미리 안 보이는 것 같을 때, 신호가 " +
                  "너무 늦게 켜지는 건지 아니면 클립·전이 쪽 문제인지 가릴 때 켤 것.")]
         [SerializeField] private bool logLandingSoon = false;
+
+        [Tooltip("몸을 <b>위로 띄우는 코드가 발동할 때마다</b> 어느 쪽이 띄웠는지 콘솔에 찍는다. " +
+                 "이 프로젝트에서 위로 솟는 경로는 넷이다 — 점프, 턱 넘기(stepUp), 스윙 릴리즈, " +
+                 "견인/체이스 도착 부스트. '떠오르는데 왜 뜨는지 모르겠다'는 상황에서 넷 중 " +
+                 "누가 범인인지 한 번에 가른다. 다른 세 스크립트(SwingConstraint·GrappleZip·" +
+                 "WebGrabThrow)도 이 스위치 하나를 같이 본다.")]
+        [SerializeField] private bool logLift = false;
+
+        /// <summary>위로 띄우는 경로들이 공용으로 보는 디버그 스위치. 같은 오브젝트에 붙은
+        /// 다른 스크립트들이 <c>_movement.LogLift</c>로 읽는다 — 체크박스를 넷으로 늘리지
+        /// 않으려는 것뿐이다.</summary>
+        public bool LogLift => logLift;
         private float _landingSoonSetTime = -1f;
         private float _landingSoonFirstSetTime = -1f;
         private int _landingSoonFlipCount;
@@ -260,6 +272,20 @@ namespace Momentum.Player
 
         private void EvaluateContacts(Collision collision)
         {
+            // 소품은 <b>턱이 아니다</b>. 잡으려고 다가가다 살짝 스치기만 해도 "낮은 턱"으로
+            // 오인해 턱 넘기 도약(velocity.y = stepUpSpeed)이 발동하고, 그게 매 스텝 다시
+            // 걸리면서 계단 오르듯 몸이 떠오른다 — 소품을 잡을 때 캐릭터가 뜨던 원인이 이것.
+            //
+            // <b>레이어가 아니라 Rigidbody 유무로 가른다.</b> 처음엔 Grabbable 레이어로만
+            // 걸렀는데 실제로는 안 걸러졌다(로그로 확인 — stepUp이 그대로 3연속 발동). 건물·
+            // 지면은 정적이라 attachedRigidbody가 없고, 굴러다니는 소품은 반드시 있다. 이름이
+            // 아니라 성질로 가르므로 레이어 설정이 어긋나도 안 샌다.
+            //
+            // 여기서 <c>return</c>하지 않는 것이 중요하다 — 소품 <b>위에 올라섰을 때</b>는
+            // 그게 정상적인 발판이므로 접지(_groundContact)는 그대로 인정해야 한다. 막으려는
+            // 것은 "옆면에 부딪힌 것을 턱으로 오인하는 것" 하나뿐이다.
+            bool isLoose = collision.rigidbody != null;
+
             // 이 콜라이더가 "넘을 수 있는 턱"인지 판정하려면 한 접촉점만 봐서는 안 된다.
             // 낮은 데만 닿았으면 턱이고, 위쪽에도 닿았으면 벽이다 — 그래서 이 콜라이더의
             // 접촉을 전부 훑은 뒤에 결론을 낸다. 벽에도 낮은 접촉점은 있기 때문에
@@ -279,6 +305,9 @@ namespace Momentum.Player
                     _groundContact = true;
                     continue; // 아래 턱 판정도 마저 해야 하므로 여기서 빠져나가지 않는다
                 }
+
+                // 소품 옆면은 턱으로 세지 않는다(위 isLoose 설명 참고).
+                if (isLoose) continue;
 
                 if (contact.point.y < stepCeiling) touchedLow = true;
                 else touchedHigh = true;
@@ -303,6 +332,16 @@ namespace Momentum.Player
 
             bool wasGrounded = _isGrounded;
             _isGrounded = _groundContact;
+
+            // 발이 땅에서 떨어지는 바로 그 순간을 찍는다. 위 네 경로("[띄움] ...")가 이 줄
+            // 직전에 하나도 안 찍혔는데 여기만 뜨면, 띄운 것은 코드가 아니라 물리다 —
+            // 겹침 밀어내기(depenetration)나 콜라이더에 올라타진 것. 그 둘은 고치는 곳이
+            // 전혀 다르므로 먼저 갈라야 한다.
+            if (logLift && wasGrounded && !_isGrounded)
+                Debug.Log($"[띄움] ▲ 이륙 — 이 순간 y속도 {_rb.linearVelocity.y:F2}, " +
+                          $"높이 {transform.position.y:F2}m. 바로 위에 다른 [띄움] 줄이 " +
+                          "없으면 코드가 아니라 물리가 띄운 것이다.", this);
+
             if (logLandingSoon && !wasGrounded && _isGrounded && _landingSoonSetTime >= 0f)
             {
                 // [SweepTest 빌드] 태그를 넣어둔다 — 이 태그 없이 옛 로그 형식이 그대로
@@ -410,9 +449,19 @@ namespace Momentum.Player
                     // 상승분은 그보다 훨씬 잘게 쌓이므로 매 스텝 전부 0이 됐다. 그렇게
                     // 붙잡혀 있는 동안 접지가 끊겼다 붙었다 하면서 낙하 판정까지 켜져
                     // 공중 애니메이션이 나오던 것이 같은 원인의 다른 증상이다.
-                    if (lowObstacle && moveDir.sqrMagnitude > 0.0001f)
+                    // 한 번 도약했으면 그 도약이 끝날 때까지 다시 걸지 않는다. 이게 없으면
+                    // 턱에 닿아 있는 동안 매 물리 스텝 3m/s가 <b>새로</b> 대입돼(로그에서 3연속
+                    // 확인), 중력이 깎을 틈이 없어 사실상 계단을 오르듯 계속 떠오른다.
+                    // _stepGraceUntil은 원래 "이 도약은 낙하가 아니다"를 표시하려고 두었던
+                    // 값인데, 도약이 진행 중인 구간을 이미 정확히 가리키고 있으므로 재발동
+                    // 금지에도 그대로 쓴다 — 새 값을 만들면 둘이 어긋날 여지만 생긴다.
+                    if (lowObstacle && moveDir.sqrMagnitude > 0.0001f && Time.time >= _stepGraceUntil)
                     {
                         velocity.y = stepUpSpeed;
+
+                        if (logLift)
+                            Debug.Log($"[띄움] 턱 넘기(stepUp) — y속도 {stepUpSpeed:F2} 대입, " +
+                                      $"높이 {transform.position.y:F2}m", this);
 
                         // 이 도약이 끝날 때까지는 낙하로 세지 않는다. 시간을 상수로 박지 않고
                         // 여기서 계산하는 이유는, 속도나 중력을 바꾸면 체공 시간도 따라
@@ -436,8 +485,9 @@ namespace Momentum.Player
                 _groundContact = false;
                 _animator?.SetTrigger(JumpHash);
 
-                if (logJumps)
-                    Debug.Log($"[PlayerMovement] 점프 발동 — 높이 {transform.position.y:F2}m", this);
+                if (logJumps || logLift)
+                    Debug.Log($"[띄움] 점프 — y속도 {jumpSpeed:F2} 대입, " +
+                              $"높이 {transform.position.y:F2}m", this);
             }
             // 눌렀는데 공중이었으면 그냥 버린다. 남겨두면 착지하는 순간 저절로 튀어 오른다.
             _jumpRequested = false;

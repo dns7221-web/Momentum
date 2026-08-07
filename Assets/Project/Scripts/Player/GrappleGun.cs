@@ -77,6 +77,16 @@ namespace Momentum.Player
                  "값을 올리면 그 상황에서 웹이 통째로 안 나간다. -90이면 제한 없음.")]
         [Range(-90f, 60f)][SerializeField] private float minAnchorElevation = -25f;
 
+        [Tooltip("바닥에 서 있을 때 옥상 윗면(roofNormalMinY 이상) 앵커에 한해 대신 쓰는 " +
+                 "더 엄격한 최소 앙각. 위 minAnchorElevation을 느슨하게(-25°) 둔 것은 공중에 " +
+                 "높이 뜬 채로 멀리 있는 건물 옥상을 스치듯 맞히는 상황 때문인데, 그 느슨한 " +
+                 "값이 '내가 지금 서 있는 옥상의 먼 지점'에도 그대로 통과돼버려 — 거리 " +
+                 "필터(minAnchorDistance)는 가까운 발밑만 거르지 6m 넘게 떨어진 같은 옥상 " +
+                 "지점은 못 거른다 — 좌클릭하자마자 그 지점으로 낮고 빠르게 미끄러지듯 끌려가는 " +
+                 "사고가 났다(녹화 영상으로 확인). 공중에 떠 있을 때는 원래 느슨한 값을 그대로 " +
+                 "쓰고, 발이 땅에 붙어 있을 때만 옥상 앵커에 이 엄격한 값을 쓴다.")]
+        [Range(-90f, 60f)][SerializeField] private float minGroundedRoofAnchorElevation = 20f;
+
         [Header("옥상 올려붙이기 — 벽면 앵커는 반드시 벽에 처박힌다")]
         [Tooltip("벽면을 겨눴을 때 부착점을 그 위 옥상 모서리로 올린다.\n\n" +
                  "끄면 겨눈 벽면에 그대로 붙는데, 그러면 진자 최저점이 정확히 그 벽면이 되어 " +
@@ -240,6 +250,10 @@ namespace Momentum.Player
         /// <summary>소품 로프 처짐 계산에 쓰는 내 몸의 Rigidbody. 속도의 로프 수직 성분을 읽는다.</summary>
         private Rigidbody _rb;
 
+        /// <summary>바닥에 서 있는지 본다 — 옥상 앵커에 <see cref="minGroundedRoofAnchorElevation"/>을
+        /// 쓸지 판단하는 데 쓴다.</summary>
+        private PlayerMovement _movement;
+
         /// <summary>소품 로프의 옆 쏠림 — 매 프레임 목표값으로 서서히 보간해 관성을 흉내낸다.</summary>
         private Vector3 _propRopeSway;
 
@@ -253,6 +267,7 @@ namespace Momentum.Player
         private void Awake()
         {
             _rb = GetComponent<Rigidbody>();
+            _movement = GetComponent<PlayerMovement>();
             if (aimCamera == null) aimCamera = Camera.main;
             if (animator == null) animator = GetComponentInChildren<Animator>();
             if (visualRoot == null && muzzle != null) visualRoot = muzzle.parent != null ? muzzle.parent.gameObject : null;
@@ -527,8 +542,15 @@ namespace Momentum.Player
                                  QueryTriggerInteraction.Ignore))
                 return false;
 
-            // 윗면을 맞았으면 그대로 쓴다. 벽면이면 그 위 옥상으로 올려본다.
-            if (hit.normal.y >= roofNormalMinY) return IsUsableAnchor(hit.point, minAnchorDistance);
+            // 윗면을 맞았으면 그대로 쓴다. 발이 땅에 붙어 있으면 더 엄격한 앙각을 쓴다 —
+            // 공중 값(minAnchorElevation)은 일부러 느슨해서 "내가 서 있는 옥상의 먼 지점"도
+            // 통과시켜버린다(위 minGroundedRoofAnchorElevation 설명 참고).
+            if (hit.normal.y >= roofNormalMinY)
+            {
+                float minElevation = (_movement != null && _movement.IsGrounded)
+                    ? minGroundedRoofAnchorElevation : minAnchorElevation;
+                return IsUsableAnchor(hit.point, minAnchorDistance, minElevation);
+            }
             if (TryLiftToRoof(ref hit)) return true;
 
             return allowWallAnchors && IsUsableAnchor(hit.point, minAnchorDistance);
@@ -538,11 +560,22 @@ namespace Momentum.Player
         /// 소품을 찾는다 — 점 레이가 아니라 <see cref="propAssistRadius"/> 반지름의
         /// SphereCast다. 소품은 옥상 바닥과 달리 헷갈릴 상대가 없어 판정을 후하게 줘도
         /// 안전하다 — "옥상 위에서 발밑을 잘못 잡는" 사고는 건물 쪽(점 레이) 얘기다.
+        ///
+        /// <b>시작점을 반지름만큼 뒤로 물려서 쏜다.</b> 유니티 SphereCast는 시작점에서 이미
+        /// 콜라이더와 겹쳐 있으면 그 콜라이더를 감지하지 못하는 알려진 한계가 있다 — 화물
+        /// 컨테이너처럼 큰 평면에 바싹 붙어 정면을 똑바로 겨누면 카메라가 이 반경 안에서
+        /// 이미 표면과 겹쳐 있어 캐스트가 통째로 실패한다(모서리처럼 실제로 더 떨어진
+        /// 지점을 겨눌 땐 안 겪는 문제라 "가까이서 정면은 안 먹히고 구석은 되는" 것처럼
+        /// 보였다). 뒤로 물려서 쏘면 겹친 채로 시작하는 상황 자체가 없어지고, 캐스트가
+        /// 진행하며 카메라 실제 위치를 지나 표면에 닿는 순간 정상 히트로 잡힌다.
         /// </summary>
         private bool CastPropAnchor(Vector3 origin, Vector3 direction, float distance, out RaycastHit hit)
         {
-            if (!Physics.SphereCast(origin, propAssistRadius, direction, out hit, distance, propMask,
-                                    QueryTriggerInteraction.Ignore))
+            float backOff = propAssistRadius + 0.05f;
+            Vector3 pulledOrigin = origin - direction * backOff;
+
+            if (!Physics.SphereCast(pulledOrigin, propAssistRadius, direction, out hit, distance + backOff,
+                                    propMask, QueryTriggerInteraction.Ignore))
                 return false;
 
             return IsUsableAnchor(hit.point, minPropAnchorDistance);
@@ -624,7 +657,10 @@ namespace Momentum.Player
         /// 건물 꼭대기를 쏘는 것이라 앙각이 0° 근처이고, 릴리즈로 크게 솟은 뒤에는 주변이
         /// <b>전부 나보다 아래</b>다. 각도로는 "발밑 바닥"과 "앞 건물 꼭대기"를 가를 수 없다.
         /// </summary>
-        private bool IsUsableAnchor(Vector3 point, float minDistance)
+        private bool IsUsableAnchor(Vector3 point, float minDistance) =>
+            IsUsableAnchor(point, minDistance, minAnchorElevation);
+
+        private bool IsUsableAnchor(Vector3 point, float minDistance, float minElevation)
         {
             Vector3 toAnchor = point - transform.position;
 
@@ -636,7 +672,7 @@ namespace Momentum.Player
             // 바로 머리 위. 수평 거리가 0이면 각도가 정의되지 않으므로 부호로 가른다.
             if (horizontal < 0.01f) return toAnchor.y > 0f;
 
-            return Mathf.Atan2(toAnchor.y, horizontal) * Mathf.Rad2Deg >= minAnchorElevation;
+            return Mathf.Atan2(toAnchor.y, horizontal) * Mathf.Rad2Deg >= minElevation;
         }
 
         private void TryAttach()

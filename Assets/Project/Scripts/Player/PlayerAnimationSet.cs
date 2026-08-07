@@ -88,5 +88,12 @@ namespace Momentum.Player
                  "GrappleFire와 달리 마스크 없이 전신을 덮는다 — 던지는 그 순간만큼은 " +
                  "이동 애니메이션과 안 섞여도 된다는 판단.")]
         public AnimationClip throwProp;
+
+        [Header("그랩 앤 슬램 (잡은 채로 V, 전신) — 비우면 슬램 레이어를 만들지 않는다")]
+        [Tooltip("WebGrabThrow가 V로 회전하며 던지는 동안 재생. Throw와 같은 이유로 마스크 " +
+                 "없이 전신을 덮는다. 제자리 회전(위치 이동 없이 회전만)인 클립이어야 " +
+                 "PlayerRootMotionRelay가 그 회전을 그대로 캐릭터에 옮길 수 있다 — 이 클립의 " +
+                 "Root Transform Rotation → Bake Into Pose는 꺼둘 것(루트 모션으로 뽑아써야 함).")]
+        public AnimationClip grabAndSlam;
     }
 }

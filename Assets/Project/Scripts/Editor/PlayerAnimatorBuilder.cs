@@ -135,6 +135,9 @@ namespace Momentum.Player.EditorTools
             if (set.throwProp != null)
                 BuildThrowLayer(controller, set);
 
+            if (set.grabAndSlam != null)
+                BuildGrabAndSlamLayer(controller, set);
+
             EditorUtility.SetDirty(controller);
             AssetDatabase.SaveAssets();
 
@@ -696,6 +699,41 @@ namespace Momentum.Player.EditorTools
 
             var layers = controller.layers;
             layers[layers.Length - 1] = throwLayer;
+            controller.layers = layers;
+        }
+
+        /// <summary>
+        /// 잡은 소품을 회전하며 던지는 순간(V) 전신을 잠깐 덮는 레이어.
+        ///
+        /// <see cref="BuildThrowLayer"/>와 완전히 같은 뼈대다(마스크 없는 단일 클립,
+        /// 트리거로 재시작 가능한 Any State 전이 하나) — 그랩 앤 슬램도 몸통까지 크게
+        /// 쓰는 전신 동작이라 마스크가 없다. 이 클립은 제자리 회전이 루트 모션으로
+        /// 들어있어야 <see cref="Momentum.Player.PlayerRootMotionRelay"/>가 그 회전을
+        /// 뽑아 캐릭터에 옮길 수 있다 — Override 블렌드라 가중치 1일 때 기본 레이어를
+        /// 완전히 덮으므로 루트 모션 추출에는 지장이 없다.
+        /// </summary>
+        private static void BuildGrabAndSlamLayer(AnimatorController controller, PlayerAnimationSet set)
+        {
+            controller.AddParameter("GrabAndSlam", AnimatorControllerParameterType.Trigger);
+
+            controller.AddLayer("GrabAndSlam");
+            var slamLayer = controller.layers[controller.layers.Length - 1];
+            slamLayer.defaultWeight = 0f;
+            slamLayer.blendingMode = AnimatorLayerBlendingMode.Override;
+
+            var stateMachine = slamLayer.stateMachine;
+            var slamState = stateMachine.AddState("GrabAndSlam");
+            slamState.motion = set.grabAndSlam;
+            stateMachine.defaultState = slamState;
+
+            var restart = stateMachine.AddAnyStateTransition(slamState);
+            restart.hasExitTime = false;
+            restart.duration = 0f;
+            restart.canTransitionToSelf = true;
+            restart.AddCondition(AnimatorConditionMode.If, 0f, "GrabAndSlam");
+
+            var layers = controller.layers;
+            layers[layers.Length - 1] = slamLayer;
             controller.layers = layers;
         }
 
