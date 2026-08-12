@@ -132,6 +132,14 @@ namespace Momentum.Player
         [Tooltip("맞았을 때 그 소품을 향해 끌려가는 속도(m/s).")]
         [Min(1f)][SerializeField] private float chaseSpeed = 26f;
 
+        [Tooltip("체이스로 낼 수 있는 <b>최대</b> 속력(m/s). 위 chaseSpeed는 이제 하한이고, " +
+                 "체이스를 걸 때 이미 그보다 빠르면 <b>그 속력을 그대로 이어받는다</b>.\n\n" +
+                 "예전에는 속력을 chaseSpeed로 덮어썼는데, 그러면 35m/s로 날다 체이스를 건 " +
+                 "플레이어가 26으로 <b>느려진다</b> — 맨 위 표의 '번다 → 지킨다 → 쓴다'와 " +
+                 "정반대로, 스윙을 잘한 쪽이 손해를 본다.\n\n" +
+                 "이 값을 chaseSpeed와 같게 두면 예전처럼 항상 고정 속력이 된다.")]
+        [Min(1f)][SerializeField] private float chaseMaxSpeed = 40f;
+
         [Tooltip("소품과 이만큼 가까워지면 도착으로 보고 놓는다.")]
         [Min(0.5f)][SerializeField] private float chaseArrivalDistance = 2f;
 
@@ -904,7 +912,13 @@ namespace Momentum.Player
                 return;
             }
 
-            _rb.linearVelocity = toTarget.normalized * chaseSpeed;
+            // 방향은 목표 쪽으로 꺾되 <b>속력은 벌어온 것을 잇는다.</b> 예전에는 chaseSpeed로
+            // 덮어써서, 35m/s로 날다 체이스를 걸면 26으로 느려졌다 — 스윙으로 속도를 번
+            // 플레이어가 오히려 손해를 보는 셈이라 이 프로젝트 주제("번다 → 지킨다 → 쓴다")와
+            // 정반대였다. chaseSpeed는 이제 하한이고, 상한만 chaseMaxSpeed로 막는다.
+            float carried = Mathf.Clamp(_rb.linearVelocity.magnitude,
+                                        chaseSpeed, Mathf.Max(chaseSpeed, chaseMaxSpeed));
+            _rb.linearVelocity = toTarget.normalized * carried;
             if (_movement != null) _movement.SuspendHorizontalControl = true;
         }
 
