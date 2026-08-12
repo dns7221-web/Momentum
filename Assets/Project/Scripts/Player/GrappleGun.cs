@@ -87,6 +87,21 @@ namespace Momentum.Player
                  "쓰고, 발이 땅에 붙어 있을 때만 옥상 앵커에 이 엄격한 값을 쓴다.")]
         [Range(-90f, 60f)][SerializeField] private float minGroundedRoofAnchorElevation = 20f;
 
+        [Tooltip("나보다 이 각도보다 <b>더 위</b>인 앵커는 버린다 — 위 두 값과 반대 방향의 " +
+                 "상한이다.\n\n" +
+                 "머리 바로 위에 붙으면 로프가 수직이 되고, 수직 로프에는 접선 방향이 없다. " +
+                 "붙는 순간부터 흔들리지 못하고 다림추처럼 매달린 채 팔다리만 움직이는 " +
+                 "'바람 인형' 상태가 되는데, 이건 자세 코드가 고장 난 게 아니라 " +
+                 "up = (앵커 - 나)가 (0,1,0)이 된 정직한 결과라 SwingConstraint 쪽에서는 " +
+                 "고칠 수가 없다. 애초에 그런 앵커를 안 주는 것이 유일한 수정이다.\n\n" +
+                 "값을 <b>내리면</b> 골목에서 바로 위 옥상을 못 잡아 웹이 안 나가고, " +
+                 "<b>올리면</b> 수직 매달림이 돌아온다. 90이면 제한 없음(예전 동작).")]
+        [Range(30f, 90f)][SerializeField] private float maxAnchorElevation = 70f;
+
+        /// <summary>앙각 상한을 적용하지 않을 때 쓰는 값. 소품은 머리 위에 있어도 잡는 것이
+        /// 맞아서(스윙이 아니라 끌어오기라 접선 방향이 필요 없다) 이 값을 넘긴다.</summary>
+        private const float NoElevationLimit = 90f;
+
         [Header("옥상 올려붙이기 — 벽면 앵커는 반드시 벽에 처박힌다")]
         [Tooltip("벽면을 겨눴을 때 부착점을 그 위 옥상 모서리로 올린다.\n\n" +
                  "끄면 겨눈 벽면에 그대로 붙는데, 그러면 진자 최저점이 정확히 그 벽면이 되어 " +
@@ -111,6 +126,15 @@ namespace Momentum.Player
         [Tooltip("옥상으로 못 올렸을 때(사거리 밖 등) 벽면에라도 붙을지. " +
                  "끄면 그 상황에서 웹이 아예 안 나간다 — 붙는 곳이 나빠도 안 나가는 것보단 낫다.")]
         [SerializeField] private bool allowWallAnchors = true;
+
+        [Tooltip("위 벽면 붙기를 허용하더라도, 매달렸을 때 진자 최저점이 건물 속인 벽면은 " +
+                 "그래도 거부한다.\n\n" +
+                 "옥상으로 올린 부착점은 IsHangBlocked를 통과해야 채택되는데, 올리기에 " +
+                 "실패해 생 벽면으로 떨어지는 경로만 그 검사를 건너뛰고 있었다 — 벽을 " +
+                 "위해 만든 검사가 정작 벽에 그대로 붙는 경우에만 안 걸렸던 셈이다.\n\n" +
+                 "끄면 예전처럼 '나쁜 곳이라도 붙는다'가 된다. 켜 두면 그 상황에서 웹이 " +
+                 "안 나가는 대신, 벽에 납작하게 붙어 끌려가는 그림이 사라진다.")]
+        [SerializeField] private bool requireClearHangOnWallAnchors = true;
 
         [Header("참조")]
         [Tooltip("로프가 나가는 지점. 권총 프리팹 안의 Muzzle. " +
@@ -553,7 +577,13 @@ namespace Momentum.Player
             }
             if (TryLiftToRoof(ref hit)) return true;
 
-            return allowWallAnchors && IsUsableAnchor(hit.point, minAnchorDistance);
+            // 옥상으로 못 올린 생 벽면. TryLiftToRoof는 후보마다 IsHangBlocked를 보는데
+            // 여기로 떨어지면 그 검사를 통째로 건너뛰고 있었다 — 벽 앵커는 반드시 벽에
+            // 처박힌다고 바로 위에 적어두고, 정작 벽에 그대로 붙는 경로만 안 보던 것이다.
+            if (!allowWallAnchors) return false;
+            if (requireClearHangOnWallAnchors && IsHangBlocked(hit.point)) return false;
+
+            return IsUsableAnchor(hit.point, minAnchorDistance);
         }
 
         /// <summary>
@@ -578,7 +608,10 @@ namespace Momentum.Player
                                     propMask, QueryTriggerInteraction.Ignore))
                 return false;
 
-            return IsUsableAnchor(hit.point, minPropAnchorDistance);
+            // 소품에는 앙각 상한을 걸지 않는다. 상한은 "수직 로프에는 접선 방향이 없다"는
+            // 스윙 사정이고, 소품은 매달리는 게 아니라 끌어오는 것이라 머리 위에 있어도 된다.
+            return IsUsableAnchor(hit.point, minPropAnchorDistance, minAnchorElevation,
+                                  NoElevationLimit);
         }
 
         private bool IsPropLayer(int layer) => (propMask.value & (1 << layer)) != 0;
@@ -660,19 +693,24 @@ namespace Momentum.Player
         private bool IsUsableAnchor(Vector3 point, float minDistance) =>
             IsUsableAnchor(point, minDistance, minAnchorElevation);
 
-        private bool IsUsableAnchor(Vector3 point, float minDistance, float minElevation)
+        private bool IsUsableAnchor(Vector3 point, float minDistance, float minElevation) =>
+            IsUsableAnchor(point, minDistance, minElevation, maxAnchorElevation);
+
+        private bool IsUsableAnchor(Vector3 point, float minDistance, float minElevation,
+                                    float maxElevation)
         {
             Vector3 toAnchor = point - transform.position;
 
             if (toAnchor.magnitude > maxRange) return false;
             if (toAnchor.magnitude < minDistance) return false;
 
-            float horizontal = new Vector2(toAnchor.x, toAnchor.z).magnitude;
+            // Vector3.Angle은 위 방향과의 사잇각(0~180)이라 90에서 빼면 그대로 앙각이 된다.
+            // 수평 거리가 0인 "바로 머리 위"에서도 정의되므로, 각도가 정의되지 않는 경우를
+            // 손으로 갈라주던 분기가 필요 없다 — 그 분기가 하던 일(머리 위는 통과)이
+            // 정확히 지금 막으려는 것이기도 했다.
+            float elevation = 90f - Vector3.Angle(toAnchor, Vector3.up);
 
-            // 바로 머리 위. 수평 거리가 0이면 각도가 정의되지 않으므로 부호로 가른다.
-            if (horizontal < 0.01f) return toAnchor.y > 0f;
-
-            return Mathf.Atan2(toAnchor.y, horizontal) * Mathf.Rad2Deg >= minElevation;
+            return elevation >= minElevation && elevation <= maxElevation;
         }
 
         private void TryAttach()

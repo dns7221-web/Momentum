@@ -1364,3 +1364,98 @@ Muzzle이 `GrappleGun.SetVisible(false)`가 꺼버리는 손목 장치(`visualRo
 - 에디터 툴 신규: `ColliderSimplifyTool`, `RoofPropOverlapChecker`
 - 디버그: `PlayerMovement.logLift` — 몸을 위로 띄우는 네 경로(점프·턱 넘기·스윙
   릴리즈·견인/체이스 부스트)와 이륙 순간을 한 스위치로 추적
+
+---
+
+## 앵커 앙각 상한 · 벽면 앵커 검사 누락 — 2026-08-12
+
+녹화본 두 개(`Movie_005` 2분 44초, `Movie_006` 24초)를 프레임 단위로 뜯어 대조했다.
+**"스윙 중 캐릭터가 바람 빠진 풍선 인형처럼 움직인다"는 증상의 원인이 애니메이션이
+아니었다.**
+
+### 인형 증상은 자세 코드가 아니라 앵커였다
+
+`Movie_006`의 9.0~10.5초를 0.1초 간격으로 뜯으니 두 가지가 드러났다.
+
+- **회전 코드는 정상이다.** 9.0(가로) → 9.4(수직)까지 매끄럽게 단조 회전한다.
+  `visualTurnSpeedDegPerSec`의 `RotateTowards`가 제대로 돌고 있고, 예전에 잡았던
+  축 뒤집힘(`minSwingUpY`)도 재발하지 않았다
+- **9.4초 이후 몸이 완벽한 수직으로 굳은 채 1초 넘게 매달려 있다.** 그 상태에서
+  팔다리만 움직이니 인형으로 보인다
+
+그리고 그건 **코드가 의도대로 동작한 결과였다.** 로프가 화면에 수직이면
+`up = (anchor - position).normalized`가 (0,1,0)이 되므로 몸이 수직인 게 수학적으로
+맞다. `facingSpeedThreshold`(4m/s) 아래라 방향 갱신도 멈춘다. 즉 `SwingConstraint`
+쪽에서는 고칠 것이 없었다 — **수직 로프에는 접선 방향이 아예 없다.**
+
+`IsUsableAnchor`에는 최소 앙각만 있고 상한이 없었다. 게다가 이 줄이 있었다.
+
+```csharp
+// 바로 머리 위. 수평 거리가 0이면 각도가 정의되지 않으므로 부호로 가른다.
+if (horizontal < 0.01f) return toAnchor.y > 0f;   // ← 머리 바로 위를 명시적으로 통과
+```
+
+`maxAnchorElevation`(기본 70°)을 추가해 막았다. 소품에는 안 건다 — 끌어오기는
+접선 방향이 필요 없어 머리 위에 있어도 잡는 것이 맞다(`NoElevationLimit`).
+
+> **`Vector3.Angle`로 특수 분기가 사라졌다.** 앙각을 `Mathf.Atan2(y, horizontal)`로
+> 손으로 구하던 것을 `90f - Vector3.Angle(toAnchor, Vector3.up)`으로 바꿨다. 이 내장
+> 함수는 수평 거리가 0이어도 정의되므로 "각도가 정의되지 않는 경우"를 갈라주던 그
+> 분기가 통째로 필요 없어진다 — 그리고 그 분기가 하던 일이 정확히 지금 막으려던
+> 동작이었다. 내장으로 바꾸는 것과 버그를 없애는 것이 같은 방향이었던 경우다.
+
+### 벽 검사가 정작 벽 경로만 건너뛰고 있었다
+
+```csharp
+if (TryLiftToRoof(ref hit)) return true;
+return allowWallAnchors && IsUsableAnchor(hit.point, minAnchorDistance);  // ← 검사 없음
+```
+
+`IsHangBlocked`(매달렸을 때 진자 최저점이 건물 속인지 미리 보는 검사)는 옥상으로
+올린 후보에만 걸려 있었고, **올리기에 실패해 생 벽면에 그대로 붙는 경로에는 안 걸려
+있었다.** 바로 위 주석에 "벽면 앵커는 반드시 벽에 처박힌다"고 적어둔 그 경우만
+검사를 안 하던 셈이다. `Movie_005` 2:11.3의 "벽에 납작하게 붙었다가 턱에 올라서는"
+장면이 이것이다.
+
+`requireClearHangOnWallAnchors`(기본 켬)로 이 경로도 검사하게 했다. 끄면 예전처럼
+"나쁜 곳이라도 붙는다"로 돌아간다 — 원래 `allowWallAnchors`에 적어둔 판단(안 나가는
+것보단 낫다)을 말없이 뒤집지 않으려고 스위치로 남겼다.
+
+### 카메라 — Deoccluder는 있었는데 해소 방식이 문제였다
+
+영상에서 가장 눈에 띄는 결함은 스윙 중 벽이 화면의 30~70%를 덮는 것이었고
+(`0:34, 1:04, 1:06, 1:10, 1:26, 1:30, 1:48, 1:56, 2:11` …), 1:16.9와 1:19.4에서는
+**카메라가 캐릭터 안으로 들어가 얼굴이 화면을 채웠다.**
+
+`CinemachineDeoccluder`는 이미 붙어 있었고 레이어(`Anchorable`·`Ground`)도 맞았다.
+문제는 `Strategy`가 `PullCameraForward`라는 것 — 좁은 골목에서는 옆으로 돌 수가 없어
+시선 방향으로만 당겨지고, 그 끝이 `MinimumDistanceFromTarget`(0.3)이라 벽 아니면
+캐릭터 몸속이었다. 인스펙터에서 조정했다.
+
+| 컴포넌트 | 항목 | 기존 → 변경 |
+|---|---|---|
+| `CinemachineDeoccluder` | Strategy | Pull Camera Forward → **Preserve Camera Height** |
+| | Minimum Distance From Target | 0.3 → **1.3** |
+| | Damping | 0.3 → **0.1** |
+| | Maximum Effort | 4 → **6** |
+| `CinemachineCamera` ▸ Lens | Near Clip Plane | 0.3 → **0.1** |
+| `SpeedFieldOfView` | Max Field Of View | 82 → **74** |
+
+> **Near Clip을 `Main Camera`에서 바꾸면 0.3으로 되돌아온다.** Brain이 매 프레임
+> `CinemachineCamera`의 `Lens`로 덮어쓰기 때문이고, README 카메라 절의 "Transform을
+> 드래그해도 아무 효과가 없다"와 같은 메커니즘이다. 주인은 항상 `CinemachineCamera`다.
+>
+> FOV도 위치가 둘이다 — `Lens ▸ FieldOfView`(60)는 서 있을 때의 화각이고, 속도가
+> 붙으면 `SpeedFieldOfView ▸ Max Field Of View`까지 올라간다. 왜곡을 줄이려고 만진
+> 것은 뒤쪽이다.
+
+### 영상 분석에 쓴 도구
+
+`Recordings/_frames.html` — 비디오를 지정 구간·간격으로 캔버스 격자에 뽑는 페이지.
+한 장의 스크린샷에 30프레임이 들어가 프레임 단위 대조가 싼값에 된다. `Recordings/`는
+`.gitignore` 대상이라 커밋되지 않는다.
+
+> **`seeked` 이벤트만 기다리면 안 된다.** 그 시점엔 새 프레임이 아직 디코드되지 않아
+> `drawImage`가 **직전 프레임**을 그린다. 처음 이걸 모르고 뽑은 시트는 전부 한 칸씩
+> 밀려 있었고, 그 상태로 읽은 구간 분류가 실제와 어긋났다.
+> `requestVideoFrameCallback`까지 기다려야 라벨과 그림이 맞는다.
