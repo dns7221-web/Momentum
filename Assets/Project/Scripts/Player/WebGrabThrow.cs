@@ -64,6 +64,18 @@ namespace Momentum.Player
         [Tooltip("이보다 가까워지면 더 안 당겨진다 — 완전히 몸에 파고드는 것을 막는다.")]
         [Min(0.1f)][SerializeField] private float propMinHoldDistance = 1.5f;
 
+        [Tooltip("잡으면 이 거리까지 <b>저절로</b> 딸려온다(m). 0이면 자동으로 안 오고 " +
+                 "예전처럼 잡은 그 자리에 떠 있는다.\n\n" +
+                 "예전에는 잡는 순간의 거리를 그대로 줄 길이로 굳혀서, 멀리 있는 걸 잡으면 " +
+                 "그 자리에 뜬 채로 있고 휠로 감아야만 왔다 — '잡았는데 안 온다'로 읽힌다. " +
+                 "그렇다고 손 앞까지 끌고 오면 큰 소품이 화면을 가리는 원래 문제로 돌아가므로, " +
+                 "가슴이 아니라 이 거리에서 멈춘다.")]
+        [Min(0f)][SerializeField] private float propAutoPullDistance = 4f;
+
+        [Tooltip("위 자동 당김의 속도(m/s). 순간이동처럼 붙으면 잡은 느낌이 안 나고, " +
+                 "너무 느리면 안 오는 것처럼 보인다.")]
+        [Min(0.1f)][SerializeField] private float propAutoPullSpeed = 12f;
+
         [Tooltip("잡은 소품이 목표 지점(내 몸 기준 저장해둔 방향 × 줄 길이)으로 얼마나 " +
                  "적극적으로 따라오는지. 클수록 뻣뻣하게, 작을수록 느슨하게 따라온다.")]
         [Min(0.1f)][SerializeField] private float propDragResponsiveness = 6f;
@@ -583,6 +595,22 @@ namespace Momentum.Player
                 // 방금 잡았다 — 지금 이 거리·방향을 기준 줄로 삼는다.
                 _heldRopeLength = Mathf.Max(toBody.magnitude, propMinHoldDistance);
                 _heldLocalDir = dirRef.InverseTransformDirection(toBody.normalized);
+            }
+
+            // 잡았으면 저절로 딸려온다. 예전에는 잡는 순간의 거리를 그대로 굳혀서 멀리
+            // 있는 걸 잡으면 그 자리에 뜬 채 휠로 감아야만 왔고, 그게 "잡았는데 안 온다"로
+            // 읽혔다. 손 앞까지 끌고 오면 큰 소품이 화면을 가리므로 목표 거리에서 멈춘다.
+            //
+            // 이미 그보다 가까이 있으면 밀어내지 않는다 — MoveTowards는 양방향이라
+            // 그냥 쓰면 가까이서 잡은 소품이 오히려 뒤로 밀려난다.
+            if (propAutoPullDistance > 0f)
+            {
+                float pullTarget = Mathf.Max(propAutoPullDistance, propMinHoldDistance);
+                if (_heldRopeLength > pullTarget)
+                {
+                    _heldRopeLength = Mathf.MoveTowards(_heldRopeLength, pullTarget,
+                                                        propAutoPullSpeed * Time.fixedDeltaTime);
+                }
             }
 
             if (reelAction != null)
