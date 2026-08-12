@@ -38,6 +38,17 @@ namespace Momentum.Player
                  "값을 올려도 달라지지 않는다. 전투에서 구속이 둘 이상이 되면 그때부터 값을 한다.")]
         [Min(1)][SerializeField] private int iterations = 1;
 
+        [Tooltip("구속의 위치 보정을 <b>보간을 살리는 방식</b>으로 넣을지.\n\n" +
+                 "끄면(예전 동작) <c>Rigidbody.position</c>에 직접 대입한다. 유니티는 이 대입을 " +
+                 "순간이동으로 보고 <b>그 스텝의 보간을 버리는데</b>, 로프가 팽팽한 동안은 매 " +
+                 "물리 스텝마다 대입하므로 스윙 내내 보간된 포즈와 순간이동한 포즈가 섞여 " +
+                 "캐릭터만 떠는 것처럼 보인다(게임 프레임은 멀쩡한데 몸만 버벅이는 증상).\n\n" +
+                 "켜면 <c>MovePosition</c>으로 넘겨 보간이 유지된다. 다만 동적 Rigidbody에서 " +
+                 "<c>MovePosition</c>은 속도와 상호작용하므로 <b>진자 감각이 미세하게 달라질 수 " +
+                 "있다</b> — 둘을 번갈아 켜보고 떨림과 손맛을 같이 보고 정할 것. 이 스위치가 " +
+                 "있는 이유가 그 비교다.")]
+        [SerializeField] private bool interpolatedConstraintMove = true;
+
         [Tooltip("로프가 이보다 짧아지지 않게 막는다. 앵커에 얼굴을 박는 것을 막을 뿐 아니라 " +
                  "감기 증폭의 상한을 정한다 — 22m에서 3m까지 감으면 접선 속도가 7.3배가 된다.")]
         [Min(0.1f)][SerializeField] private float minRopeLength = 3f;
@@ -779,7 +790,20 @@ namespace Momentum.Player
             if (_rb.SweepTest(direction, out RaycastHit blocked, pull, QueryTriggerInteraction.Ignore))
                 pull = Mathf.Max(0f, blocked.distance - ContactSkin);
 
-            if (pull > 0f) _rb.position += direction * pull;
+            // 대입이냐 MovePosition이냐는 물리적으로 같은 보정이고 차이는 보간뿐이다.
+            // position 대입은 유니티가 순간이동으로 취급해 그 스텝의 보간을 버리는데,
+            // 팽팽한 동안 매 스텝 일어나므로 그게 곧 "캐릭터만 버벅인다"가 된다.
+            //
+            // 단 MovePosition은 이번 물리 스텝이 돌아야 반영되므로 _rb.position이 즉시
+            // 안 바뀐다 — iterations를 2 이상으로 올리면 뒤 회차가 옛 위치를 읽어 사실상
+            // 1회만 먹는다. 지금은 구속이 하나라 1회로 정확해서 문제가 없지만, 전투에서
+            // 구속이 둘 이상이 되어 iterations를 올릴 때는 이 스위치를 꺼야 한다.
+            if (pull > 0f)
+            {
+                Vector3 corrected = _rb.position + direction * pull;
+                if (interpolatedConstraintMove) _rb.MovePosition(corrected);
+                else _rb.position = corrected;
+            }
 
             // 2. 속도 — 앵커에서 멀어지는 성분만 지운다.
             //
