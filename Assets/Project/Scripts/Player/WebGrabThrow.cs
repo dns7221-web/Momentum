@@ -110,6 +110,13 @@ namespace Momentum.Player
                  "두면 자연스럽게 겹쳐 끊긴다.")]
         [Min(0f)][SerializeField] private float throwLayerHoldTime = 0.5f;
 
+        [Tooltip("Throw·GrabAndSlam 레이어 가중치가 0↔1을 오가는 속도(초당). 8이면 0.125초.\n\n" +
+                 "0으로 두면 예전처럼 한 프레임에 대입한다 — 스윙 자세가 뚝 끊기고 " +
+                 "던지기 자세로 갈아 끼워지는 그 그림으로 즉시 돌아간다. 너무 느리게 잡으면 " +
+                 "(2 이하) 던지는 동작이 다 끝나도록 가중치가 안 차서 팔만 어정쩡하게 든다.\n\n" +
+                 "SwingConstraint의 animLayerLerpSpeed와 같은 단위·같은 기본값이다.")]
+        [Min(0f)][SerializeField] private float layerFadeSpeed = AnimatorLayerFade.DefaultSpeed;
+
         [Tooltip("놓는 순간 조준 방향으로 얹는 속도(m/s). 여기에 내 현재 속도가 그대로 " +
                  "더해진다 — 정지 상태로 던지면 이 값이 전부고, 스윙 중에 던지면 그만큼 더 세다.")]
         [Min(0f)][SerializeField] private float throwForce = 22f;
@@ -371,11 +378,19 @@ namespace Momentum.Player
         /// </summary>
         private void Update()
         {
-            if (animator != null && _throwLayerIndex >= 0)
-                animator.SetLayerWeight(_throwLayerIndex, Time.time < _throwWeightUntil ? 1f : 0f);
+            // 던지기는 양쪽으로 서서히 간다. 대입하면 스윙으로 날아가던 자세가 그 프레임에
+            // 통째로 갈아 끼워졌다가 0.4초 뒤 다시 갈아 끼워진다 — 공격이 스윙과 안
+            // 이어져 보이던 것이 이것이다. 루트 모션을 안 쓰는 레이어라 켜는 쪽도 안전하다.
+            AnimatorLayerFade.To(animator, _throwLayerIndex,
+                                 Time.time < _throwWeightUntil ? 1f : 0f, layerFadeSpeed);
 
-            if (animator != null && _slamLayerIndex >= 0)
-                animator.SetLayerWeight(_slamLayerIndex, IsSlamming ? 1f : 0f);
+            // 슬램은 <b>켤 때만 즉시</b>다. 이 레이어의 루트 모션(제자리 180도 회전)을
+            // PlayerRootMotionRelay가 뽑아 쓰는데, 가중치가 곧 그 회전의 크기라서 서서히
+            // 켜면 도는 각도가 그만큼 모자란다 — 돌아본 방향으로 던진다는 규칙이 깨진다.
+            // 끌 때는 회전이 이미 끝난 뒤라 서서히 꺼도 안전하고, 그래야 던지고 나서
+            // 원래 자세로 뚝 끊기지 않는다.
+            AnimatorLayerFade.To(animator, _slamLayerIndex, IsSlamming ? 1f : 0f,
+                                 IsSlamming ? 0f : layerFadeSpeed);
 
             if (logLayerWeights && animator != null && _heldBody != null)
             {
@@ -488,7 +503,21 @@ namespace Momentum.Player
         private void SetHitFeedbackSuppressed(bool suppressed)
         {
             if (HitFeedbackManager.Instance != null)
-                HitFeedbackManager.Instance.SuppressFeedback = suppressed;
+                HitFeedbackManager.Instance.SuppressedByHold = suppressed;
+        }
+
+        /// <summary>
+        /// 방금 던진 소품에 "날아가는 중"을 알린다. 소품은 평소 <c>Discrete</c>로 있다가
+        /// 이때만 <c>Continuous</c>로 올라가고 첫 충돌에서 되돌아간다 —
+        /// <see cref="Level.CombatProp.BeginThrownFlight"/> 참고.
+        ///
+        /// <b>속도를 대입한 뒤에 부른다.</b> 순서가 바뀌면 PhysX가 아직 0인 속도로 스윕
+        /// 준비를 하게 되고, 정작 뚫으면 안 되는 첫 스텝이 예전 모드로 돈다.
+        /// </summary>
+        private static void MarkThrown(Rigidbody body)
+        {
+            if (body != null && body.TryGetComponent(out Level.CombatProp prop))
+                prop.BeginThrownFlight();
         }
 
         private void FixedUpdate()
@@ -664,6 +693,7 @@ namespace Momentum.Player
             Vector3 aimDirection = aimCamera != null ? aimCamera.transform.forward : transform.forward;
             body.linearVelocity = _rb.linearVelocity + aimDirection * throwForce;
             body.angularVelocity = RandomSpin();
+            MarkThrown(body);
 
             // 와이어 잔상 — 던진 직후 잠깐 소품을 쫓아가며 그려지다가 풀린다.
             _ropeTrailBody = body;
@@ -732,6 +762,7 @@ namespace Momentum.Player
 
             body.linearVelocity = _rb.linearVelocity + transform.forward * slamThrowForce;
             body.angularVelocity = RandomSpin();
+            MarkThrown(body);
 
             _ropeTrailBody = body;
             _ropeReleaseUntil = Time.time + ropeReleaseTrailDuration;

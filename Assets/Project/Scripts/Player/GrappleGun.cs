@@ -156,6 +156,12 @@ namespace Momentum.Player
                  "클립 길이보다 조금 짧게 두면 자연스럽게 겹쳐 끊긴다 — 정확히 맞출 필요는 없다.")]
         [Min(0f)][SerializeField] private float fireLayerHoldTime = 0.4f;
 
+        [Tooltip("GrappleFire 레이어 가중치가 0↔1을 오가는 속도(초당). 8이면 0.125초. " +
+                 "0이면 예전처럼 한 프레임에 대입한다.\n\n" +
+                 "이 레이어는 마스크(팔)가 걸려 있어 대입해도 몸 전체가 갈아 끼워지지는 " +
+                 "않지만, 스윙 중에 쏘면 팔이 한 프레임에 튄다.")]
+        [Min(0f)][SerializeField] private float fireLayerFadeSpeed = AnimatorLayerFade.DefaultSpeed;
+
         [Header("소품 잡기 로프 처짐 — WebGrabThrow가 소품을 물고 있는 동안(IsPropAnchor)만")]
         [Tooltip("건물 스윙 로프는 팽팽한 직선 그대로 두고, 소품을 잡고 있을 때만 이 " +
                  "세그먼트 수로 나눠 곡선을 그린다. 스윙 로프는 실제로 팽팽하니 직선이 " +
@@ -414,8 +420,8 @@ namespace Momentum.Player
         /// </summary>
         private void UpdateFireLayerWeight()
         {
-            if (animator == null || _fireLayerIndex < 0) return;
-            animator.SetLayerWeight(_fireLayerIndex, Time.time < _fireWeightUntil ? 1f : 0f);
+            AnimatorLayerFade.To(animator, _fireLayerIndex,
+                                 Time.time < _fireWeightUntil ? 1f : 0f, fireLayerFadeSpeed);
         }
 
         // ─── 판정 ───

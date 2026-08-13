@@ -836,7 +836,13 @@ namespace Momentum.Level
                 var rb = prop.AddComponent<Rigidbody>();
                 rb.mass = 30f; // 기본 프롭 질량 (30kg)
                 rb.interpolation = RigidbodyInterpolation.Interpolate;
-                rb.collisionDetectionMode = CollisionDetectionMode.Continuous;
+
+                // <b>Discrete로 낳는다.</b> 예전에는 여기서 Continuous를 박았는데, 터널링을
+                // 막아야 하는 것은 던져서 날아가는 그 한 번뿐인데도 옥상에 가만히 놓인
+                // 수백 개까지 매 물리 스텝 스윕 판정을 받고 있었다(물리가 200Hz라 초당
+                // 수만 번). 날아가는 동안만 올리는 일은 CombatProp이 맡는다 —
+                // <see cref="CombatProp.BeginThrownFlight"/>.
+                rb.collisionDetectionMode = CollisionDetectionMode.Discrete;
             }
 
             if (prop.GetComponent<CombatProp>() == null)

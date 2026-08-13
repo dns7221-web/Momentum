@@ -82,6 +82,17 @@ namespace Momentum.Player
                  "스치는 것까지 끊으면 건물 옆을 지나갈 때마다 줄이 풀려 스윙이 이어지지 않는다.")]
         [Min(0f)][SerializeField] private float impactReleaseSpeed = 8f;
 
+        [Tooltip("매달려 있는 동안 히트스톱·카메라 셰이크를 끈다.\n\n" +
+                 "옥상마다 소품이 1~4개씩 놓여 있어서, 아치가 옥상을 스칠 때마다 그것들을 " +
+                 "30m/s로 들이받고 그때마다 TimeScale이 0.05까지 떨어진다. 2026-08-13 " +
+                 "에디터 로그 실측으로 한 세션에 18회, 그중 두 번은 3~4회 연타였다 — " +
+                 "슬로우모션이 풀리기도 전에 다음 것이 걸리는 구간이다.\n\n" +
+                 "날아가다 스친 것은 타격이 아니므로 끄는 것이 맞다. 다만 \"스윙으로 " +
+                 "들이받는 것\"을 나중에 공격으로 쓸 생각이 있으면 이 스위치를 꺼서 " +
+                 "예전 동작으로 즉시 돌아간다. 소품을 손에 쥐고 있는 동안의 억제는 " +
+                 "WebGrabThrow가 따로 가지므로 이걸 꺼도 그쪽은 그대로 산다.")]
+        [SerializeField] private bool suppressHitFeedbackWhileSwinging = true;
+
         [Header("감기 (InputSystem_Actions ▸ Player ▸ Reel)")]
         [SerializeField] private InputActionReference reelAction = null;
         [Tooltip("휠 한 칸에 목표 길이가 몇 m 바뀌는가. 실제 길이는 아래 속도로 그 목표를 따라간다.")]
@@ -570,6 +581,8 @@ namespace Momentum.Player
             // 접선 속도가 다음 스텝에 입력값으로 대체되어 스윙이 그 자리에서 죽는다.
             if (_movement != null) _movement.SuspendHorizontalControl = true;
 
+            SetHitFeedbackSuppressed(true);
+
             // 붙는 순간을 명시적으로 알린다. Swing 레이어의 상태 기계는 가중치 0일 때도
             // 계속 돌고 있어서, 매번 SwingLoop부터 다시 시작한다는 보장이 없다 — 트리거로
             // "지금 막 붙었다"를 알려야 StartSwing 클립(있다면)이 확실히 재생된다.
@@ -623,6 +636,10 @@ namespace Momentum.Player
             RopeLength = 0f;
             if (_movement != null) _movement.SuspendHorizontalControl = false;
 
+            // 아래에 이른 return이 둘 있으므로(보상 없음·수평 속도 0) 그보다 위에서 푼다.
+            // 억제를 켜둔 채로 빠져나가면 그 뒤로 타격 피드백이 영영 안 나온다.
+            SetHitFeedbackSuppressed(false);
+
             // 놓는 순간을 명시적으로 알린다 — boost 여부(컴포넌트가 꺼져서 정리되는 경우
             // 등)와 무관하게, 스윙이 끝났다는 사실 자체는 항상 알려야 SwingLand 클립이
             // (있다면) 놓친 적 없이 재생된다.
@@ -659,6 +676,25 @@ namespace Momentum.Player
 
             // 감기 증폭과 겹쳐 상한을 넘지 않게 한다 — maxSpeed는 설계값이 아니라 안전장치다.
             _rb.linearVelocity = Vector3.ClampMagnitude(_rb.linearVelocity, maxSpeed);
+        }
+
+        /// <summary>
+        /// 매달려 있는 동안 타격 피드백을 재운다. <see cref="suppressHitFeedbackWhileSwinging"/>
+        /// 참고.
+        ///
+        /// <c>Instance</c>가 없을 수 있으므로(피드백 매니저가 없는 씬에서도 스윙은 돌아야
+        /// 한다) 널 검사를 여기 한 곳에 모은다 — <c>WebGrabThrow</c>가 자기 쪽에
+        /// <c>SetHitFeedbackSuppressed</c>를 둔 것과 같은 이유이자 같은 모양이다.
+        /// </summary>
+        private void SetHitFeedbackSuppressed(bool suppressed)
+        {
+            // <b>끄는 쪽은 스위치와 무관하게 항상 통과시킨다.</b> 매달린 채로 인스펙터에서
+            // 스위치를 내리면 이미 켜둔 억제를 풀어줄 사람이 없어져, 그 뒤로 타격 피드백이
+            // 영영 안 나온다 — A/B 스위치를 런타임에 만지는 것이 이 프로젝트의 검증 방식이라
+            // 실제로 밟게 되는 경로다.
+            if (suppressed && !suppressHitFeedbackWhileSwinging) return;
+            if (HitFeedbackManager.Instance != null)
+                HitFeedbackManager.Instance.SuppressedBySwing = suppressed;
         }
 
         /// <summary>

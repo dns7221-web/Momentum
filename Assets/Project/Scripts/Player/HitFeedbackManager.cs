@@ -55,15 +55,35 @@ namespace Momentum.Player
         private float _nextHitStopAllowedTime = 0f;
 
         /// <summary>
-        /// 켜져 있는 동안은 <see cref="TriggerHitFeedback"/>이 통째로 무시된다. 손으로
-        /// 소품을 붙잡아 끌고 다니는 동안(WebGrabThrow), 그 소품이 주변 다른 소품을
-        /// 스치면 그게 다시 옆의 소품을 치는 식으로 연쇄가 번져 히트스톱이 초당 여러 번
-        /// 재발동하고 TimeScale이 거의 계속 바닥에 눌려 있는 문제가 있었다 — 부딪힌
-        /// 상대 하나하나를 가려내는 대신, "지금 뭔가를 손으로 붙잡고 있다" 동안은
-        /// 이 피드백 자체를 아예 꺼버리는 쪽이 훨씬 단순하고 확실하다. 던지거나 놓는
-        /// 순간 바로 꺼서(false) 정상적인 타격 피드백은 그대로 산다.
+        /// 손으로 소품을 붙잡아 끌고 다니는 동안(<c>WebGrabThrow</c>) 켠다. 그 소품이 주변
+        /// 다른 소품을 스치면 그게 다시 옆의 소품을 치는 식으로 연쇄가 번져 히트스톱이 초당
+        /// 여러 번 재발동하고 TimeScale이 거의 계속 바닥에 눌려 있는 문제가 있었다 — 부딪힌
+        /// 상대 하나하나를 가려내는 대신, "지금 뭔가를 손으로 붙잡고 있다" 동안은 이 피드백
+        /// 자체를 아예 꺼버리는 쪽이 훨씬 단순하고 확실하다. 던지거나 놓는 순간 바로 꺼서
+        /// 정상적인 타격 피드백은 그대로 산다.
         /// </summary>
-        public bool SuppressFeedback { get; set; }
+        public bool SuppressedByHold { get; set; }
+
+        /// <summary>
+        /// 스윙으로 매달려 날아가는 동안(<see cref="SwingConstraint"/>) 켠다. 옥상마다
+        /// 소품이 1~4개씩 놓여 있어 아치가 옥상을 스칠 때마다 그것들을 30m/s로 들이받고,
+        /// 그때마다 <c>TimeScale</c>이 0.05까지 떨어진다 — 실측(2026-08-13 에디터 로그)에서
+        /// 한 세션에 18회, 그중 두 번은 3~4회 연타였다. <b>날아가다 스친 것은 타격이 아니다.</b>
+        /// </summary>
+        public bool SuppressedBySwing { get; set; }
+
+        /// <summary>
+        /// 둘 중 하나라도 켜져 있으면 <see cref="TriggerHitFeedback"/>이 통째로 무시된다.
+        ///
+        /// <b>왜 스위치를 하나로 공유하지 않는가.</b> 원래는 <c>SuppressFeedback</c> 하나를
+        /// 두 쪽이 같이 썼는데, 그러면 <b>먼저 끄는 쪽이 다른 쪽의 억제까지 꺼버린다</b> —
+        /// 소품을 던지는 순간(<c>SetHitFeedbackSuppressed(false)</c>) 아직 매달려 있는
+        /// 스윙의 억제도 같이 풀린다. 이 프로젝트에서 이미 두 번 겪은 종류의 사고다
+        /// (<c>OverrideRopeTarget</c>의 소유권 문제, <c>SuspendHorizontalControl</c>을
+        /// 스윙과 견인이 나눠 갖던 문제). <b>상태를 나눠 갖게 하지 말고 각자 자기 것만
+        /// 주장하게 하면</b>, 누가 언제 끄든 남의 것을 건드릴 수 없다.
+        /// </summary>
+        private bool Suppressed => SuppressedByHold || SuppressedBySwing;
 
         private void Awake()
         {
@@ -88,7 +108,7 @@ namespace Momentum.Player
         /// <param name="hitPoint">충돌 발생 위치</param>
         public void TriggerHitFeedback(float relativeSpeed, Vector3 hitPoint)
         {
-            if (SuppressFeedback) return;
+            if (Suppressed) return;
 
             if (relativeSpeed < minHitStopSpeed)
             {

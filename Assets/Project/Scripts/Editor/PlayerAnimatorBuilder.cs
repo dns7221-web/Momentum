@@ -686,6 +686,10 @@ namespace Momentum.Player.EditorTools
             throwLayer.defaultWeight = 0f;
             throwLayer.blendingMode = AnimatorLayerBlendingMode.Override;
 
+            // 마스크를 넣으면 스윙 중에 던져도 다리가 매달린 자세를 유지한다. 비워두면
+            // 예전처럼 전신을 덮는다 — GrappleFire와 같은 구조이므로 여기도 조건부다.
+            if (set.throwMask != null) throwLayer.avatarMask = set.throwMask;
+
             var stateMachine = throwLayer.stateMachine;
             var throwState = stateMachine.AddState("ThrowProp");
             throwState.motion = set.throwProp;
