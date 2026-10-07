@@ -1,0 +1,222 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4c33cf9b66c0af948a3d9f2eda29f069, type: 3}
+  m_Name: CityPlan_v3
+  m_EditorClassIdentifier: Assembly-CSharp::Momentum.Level.CityPlanSettings
+  land:
+    x0: -200
+    x1: 200
+    z0: -430
+    z1: 430
+  citySouthZ: -406
+  cityNorthZ: 416
+  avenues:
+  - id: A1
+    centerX: -168
+    width: 24
+  - id: A2
+    centerX: -84
+    width: 24
+  - id: A3
+    centerX: 0
+    width: 24
+  - id: A4
+    centerX: 84
+    width: 24
+  - id: A5
+    centerX: 168
+    width: 24
+  streets:
+  - id: S1
+    centerZ: -250
+    width: 12
+  - id: S2
+    centerZ: -88
+    width: 12
+  - id: S3
+    centerZ: 74
+    width: 12
+  - id: S4
+    centerZ: 266
+    width: 12
+  diagonalFrom: {x: 164.9, y: -406}
+  diagonalTo: {x: -84, y: 74}
+  diagonalWidth: 24
+  park:
+    x0: -72
+    x1: 72
+    z0: 80
+    z1: 260
+  plazas:
+  - id: P1
+    center: {x: 84, y: -250}
+    radius: 34
+  - id: P2
+    center: {x: 0, y: -88}
+    radius: 34
+  - id: P3
+    center: {x: -84, y: 74}
+    radius: 34
+  westPromenade:
+    x0: -200
+    x1: -180
+    z0: -430
+    z1: 430
+  southPromenade:
+    x0: -180
+    x1: 180
+    z0: -430
+    z1: -406
+  landmarks:
+  - id: L1
+    area:
+      x0: 12
+      x1: 44
+      z0: -348
+      z1: -312
+    height: 150
+  - id: L2
+    area:
+      x0: 12
+      x1: 46
+      z0: -22
+      z1: 14
+    height: 171
+  - id: L3
+    area:
+      x0: 96
+      x1: 128
+      z0: 152
+      z1: 188
+    height: 132
+  railDeck:
+    x0: 173
+    x1: 179
+    z0: -390
+    z1: 68
+  railDeckTop: 12
+  railDeckThickness: 1.5
+  railPillarSpacing: 24
+  railPillarSize: 1.2
+  water:
+  - x0: -260
+    x1: -200
+    z0: -490
+    z1: 430
+  - x0: -200
+    x1: 200
+    z0: -490
+    z1: -430
+  waterSurfaceY: -2
+  riverbedY: -3
+  piers:
+  - x0: -228
+    x1: -200
+    z0: -334
+    z1: -326
+  - x0: -228
+    x1: -200
+    z0: -154
+    z1: -146
+  - x0: -228
+    x1: -200
+    z0: 106
+    z1: 114
+  - x0: -228
+    x1: -200
+    z0: 226
+    z1: 234
+  - x0: -144
+    x1: -136
+    z0: -458
+    z1: -430
+  - x0: 36
+    x1: 44
+    z0: -458
+    z1: -430
+  backdropEast:
+    x0: 180
+    x1: 200
+    z0: -406
+    z1: 416
+  backdropNorth:
+    x0: -200
+    x1: 200
+    z0: 416
+    z1: 430
+  backdropSegment: 20
+  backdropHeight: {x: 60, y: 120}
+  boundaryHeight: 300
+  frontageDepth: 20
+  lotWidthLarge: 20
+  lotWidthMedium: 15
+  lotWidthSmall: 13
+  minRemainder: 13
+  diagonalBandOuter: 28
+  diagonalWallOffset: 20
+  diagonalWallLength: 18
+  diagonalWallDepth: 16
+  diagonalWallSpacing: 19
+  diagonalWallStart: 10
+  plazaLotClearance: 34
+  plazaDiagonalClearance: 36
+  landmarkDiagonalClearance: 12
+  lotSeed: 20261007
+  jitterSeed: 4242
+  baseHeight: 36
+  peaks:
+  - center: {x: 20, y: -320}
+    amplitude: 56
+    sigma: 85
+  - center: {x: -10, y: 0}
+    amplitude: 64
+    sigma: 100
+  northZ: 272
+  northHeight: 38
+  parkEdgeDistance: 40
+  parkEdgeBonus: 22
+  heightJitter: 6
+  minHeight: 34
+  greyboxOverMax: 8
+  greyboxHeightStep: 3
+  treeSpacing: 15
+  treeInset: 8
+  treeSkipChance: 0.25
+  treeHeight: 12
+  treeSeed: 77
+  backdropSeed: 31
+  orientationSeed: 911
+  gravityScale: 1.5
+  webRange: 22
+  largePrefab: {fileID: 0}
+  mediumPrefab: {fileID: 0}
+  smallPrefab: {fileID: 0}
+  rotateTiers: 1
+  avenueRoadPrefab: {fileID: 0}
+  sidewalkStripPrefab: {fileID: 0}
+  sidewalkStripWidth: 3
+  streetRoadPrefab: {fileID: 0}
+  intersectionPrefab: {fileID: 0}
+  surfaceColliders: 1
+  roofRailPrefab: {fileID: 0}
+  roofRailInset: 0.3
+  treePrefab: {fileID: 0}
+  greyboxMaterials: []
+  landmarkMaterial: {fileID: 0}
+  backdropMaterial: {fileID: 0}
+  groundMaterial: {fileID: 0}
+  pavingMaterial: {fileID: 0}
+  parkMaterial: {fileID: 0}
+  waterMaterial: {fileID: 0}
+  railMaterial: {fileID: 0}
+  treeMaterial: {fileID: 0}
+  markStatic: 1
