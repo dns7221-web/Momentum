@@ -513,7 +513,7 @@
                 {
                     "name": "",
                     "id": "f595eacf-584d-4703-9282-8cbdd9487864",
-                    "path": "<Mouse>/leftButton",
+                    "path": "<Keyboard>/r",
                     "interactions": "",
                     "processors": "",
                     "groups": "",
