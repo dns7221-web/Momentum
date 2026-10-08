@@ -197,17 +197,17 @@ MonoBehaviour:
   orientationSeed: 911
   gravityScale: 1.5
   webRange: 22
-  largePrefab: {fileID: 0}
-  mediumPrefab: {fileID: 0}
-  smallPrefab: {fileID: 0}
+  largePrefab: {fileID: 2156691396101852631, guid: 5ee3c36b155058447bd827b635d7df02, type: 3}
+  mediumPrefab: {fileID: 3872548141855367529, guid: 9825bb854c6e0794d932095fbb022907, type: 3}
+  smallPrefab: {fileID: 3486965590206602529, guid: 62e727cc5ca50694dad970423e23f134, type: 3}
   rotateTiers: 1
-  avenueRoadPrefab: {fileID: 0}
-  sidewalkStripPrefab: {fileID: 0}
+  avenueRoadPrefab: {fileID: 919132149155446097, guid: 8137567f3fff8784e94181529a29f23e, type: 3}
+  sidewalkStripPrefab: {fileID: 919132149155446097, guid: bc6a35bc59493414da9f19c8c0f76c45, type: 3}
   sidewalkStripWidth: 3
-  streetRoadPrefab: {fileID: 0}
-  intersectionPrefab: {fileID: 0}
+  streetRoadPrefab: {fileID: 919132149155446097, guid: f6c03957104fd3345a8b572c7b44125a, type: 3}
+  intersectionPrefab: {fileID: 919132149155446097, guid: ab06e62d938f2194dbb1c916c152d36a, type: 3}
   surfaceColliders: 1
-  roofRailPrefab: {fileID: 0}
+  roofRailPrefab: {fileID: 919132149155446097, guid: 9bd54e536f92a2b4788aad93fb3369fb, type: 3}
   roofRailInset: 0.3
   treePrefab: {fileID: 0}
   greyboxMaterials: []
