@@ -73,9 +73,19 @@ namespace Momentum.Player
         /// <summary>견인 중인가. 스윙 쪽이 이 값을 보고 서로 끼어들지 않게 한다.</summary>
         public bool IsZipping { get; private set; }
 
+        // 추가 생성
+        /// <summary>
+        /// 견인 입력 액션. <see cref="WebSlingshot"/>이 같은 우클릭을 지상/공중으로 나눠 쓰므로,
+        /// 슬링샷 쪽 칸이 비어 있으면 이걸 빌려 간다 — 두 칸에 따로 넣어 어긋나는 일을 막는다.
+        /// </summary>
+        public InputActionReference ZipAction => zipAction;
+
         private Rigidbody _rb;
         private PlayerMovement _movement;
         private Animator _animator;
+
+        // 추가 생성 — 우클릭을 같이 쓰는 슬링샷. 없으면 예전처럼 견인만 한다.
+        private WebSlingshot _slingshot;
 
         /// <summary>Zip 레이어 인덱스. 클립을 안 채웠으면 -1로 남고 가중치 조작을 건너뛴다.</summary>
         private int _zipLayerIndex = -1;
@@ -106,6 +116,7 @@ namespace Momentum.Player
             _animator = GetComponentInChildren<Animator>();
             if (_animator != null) _zipLayerIndex = _animator.GetLayerIndex("Zip");
             if (gun == null) gun = GetComponent<GrappleGun>();
+            _slingshot = GetComponent<WebSlingshot>();   // 추가 생성
 
             if (gun == null)
                 Debug.LogWarning("[GrappleZip] GrappleGun이 없어 앵커를 찾을 수 없다.", this);
@@ -141,6 +152,11 @@ namespace Momentum.Player
         private void TryStart()
         {
             if (IsZipping || gun == null || gun.IsAttached) return;
+
+            // 추가 생성 — 슬링샷이 이번 우클릭을 가져가면 양보한다(발이 땅에 있고 붙은 건물
+            // 옥상이 훨씬 높을 때). 둘 다 같은 액션을 구독하므로 누가 먼저 불릴지 모르는데,
+            // ClaimsPress()는 어느 순서로 불려도 같은 답을 준다(WebSlingshot 주석 참고).
+            if (_slingshot != null && _slingshot.ClaimsPress()) return;
             // 소품은 견인 목표에서 뺀다 — 옥상 위에서 우클릭했을 때 바로 옆 드럼통으로
             // 순간 이동해버리는 사고를 막는다. 견인은 건물끼리 옮겨다니는 동작이다.
             //
