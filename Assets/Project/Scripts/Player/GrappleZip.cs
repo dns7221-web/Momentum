@@ -143,7 +143,12 @@ namespace Momentum.Player
             if (IsZipping || gun == null || gun.IsAttached) return;
             // 소품은 견인 목표에서 뺀다 — 옥상 위에서 우클릭했을 때 바로 옆 드럼통으로
             // 순간 이동해버리는 사고를 막는다. 견인은 건물끼리 옮겨다니는 동작이다.
-            if (!gun.TryFindAnchor(out RaycastHit hit, includeProps: false)) return;
+            //
+            // 수정: requireClearHang: false — 생 벽면의 진자 최저점 검사를 끈다. 견인은
+            // 매달리지 않으므로 그 검사가 의미가 없는데, 켜두면 벽면 목표가 전부 걸러져
+            // "지상에 떨어지면 못 올라온다"가 다시 생긴다(이 컴포넌트가 존재하는 이유 그 자체).
+            // 지상 → 벽 견인 → 벽에서 튕겨 나오며 솟음 → 옥상이 사거리에 들어옴 → 스윙/견인.
+            if (!gun.TryFindAnchor(out RaycastHit hit, includeProps: false, requireClearHang: false)) return;
 
             // 평평한 면인데 내 발보다 안 높으면 거부한다 — "같은 옥상 바닥을 다시 잡는" 것을
             // 걸러낸다. 벽면(normal.y가 낮음)은 그대로 통과시킨다 — 다른 건물 벽을 타고

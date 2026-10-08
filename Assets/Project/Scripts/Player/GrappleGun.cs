@@ -483,8 +483,15 @@ namespace Momentum.Player
         /// 옆 드럼통·에어컨 실외기로 순간 견인되며 Zip 애니메이션이 튀어나온다 — 붙기만
         /// 하고 안 당기는 <see cref="WebGrabThrow"/>와 다르게, 견인은 <b>진짜로 그 자리까지
         /// 이동</b>하므로 이 사고가 훨씬 크게 보인다.
+        ///
+        /// <paramref name="requireClearHang"/>(추가 생성): <c>false</c>면 생 벽면 앵커의
+        /// 진자 최저점 검사(<see cref="requireClearHangOnWallAnchors"/>)를 건너뛴다.
+        /// 그 검사는 <b>매달려 흔들리는</b> 스윙을 위한 것인데, 견인은 매달리지 않고 도착하면
+        /// 바로 놓으므로 진자 최저점이 존재하지 않는다. 그런데 벽면 위 점은 바로 아래가 같은
+        /// 벽이라 이 검사에 <b>항상</b> 걸려서, 지상에서는 견인이 통째로 안 나가고 있었다
+        /// (옥상은 사거리·최대 앙각 밖이라 벽면이 유일한 목표인데 그게 막혔다).
         /// </summary>
-        public bool TryFindAnchor(out RaycastHit hit, bool includeProps)
+        public bool TryFindAnchor(out RaycastHit hit, bool includeProps, bool requireClearHang = true)
         {
             hit = default;
             if (aimCamera == null) return false;
@@ -502,7 +509,7 @@ namespace Momentum.Player
             Vector3 center = aimCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f)).direction;
 
             // 정중앙을 먼저 본다. 겨눈 그대로 붙는 경험이 기본이어야 조준이 조작으로 남는다.
-            if (CastAnchor(origin, center, distance, includeProps, out hit)) return true;
+            if (CastAnchor(origin, center, distance, includeProps, requireClearHang, out hit)) return true;
 
             if (aimAssistAngle <= 0f || aimAssistRays <= 0) return false;
 
@@ -519,7 +526,7 @@ namespace Momentum.Player
                 Vector3 direction = Quaternion.AngleAxis(spin, center)
                                   * (Quaternion.AngleAxis(radius, up) * center);
 
-                if (CastAnchor(origin, direction, distance, includeProps, out hit)) return true;
+                if (CastAnchor(origin, direction, distance, includeProps, requireClearHang, out hit)) return true;
             }
 
             return false;
@@ -595,7 +602,9 @@ namespace Momentum.Player
         /// 않는 이유는 두 판정의 성격이 달라서다 — 소품은 두께를 줘서 후하게, 건물은 옥상
         /// 올려붙이기·벽면 판정이 정확한 법선·지점을 요구해서 점 그대로 둬야 한다.
         /// </summary>
-        private bool CastAnchor(Vector3 origin, Vector3 direction, float distance, bool includeProps, out RaycastHit hit)
+        // 수정: requireClearHang 인자 추가 — 견인(GrappleZip)은 생 벽면 진자 검사를 건너뛴다.
+        private bool CastAnchor(Vector3 origin, Vector3 direction, float distance, bool includeProps,
+                                bool requireClearHang, out RaycastHit hit)
         {
             if (includeProps && CastPropAnchor(origin, direction, distance, out hit))
                 return true;
@@ -619,7 +628,9 @@ namespace Momentum.Player
             // 여기로 떨어지면 그 검사를 통째로 건너뛰고 있었다 — 벽 앵커는 반드시 벽에
             // 처박힌다고 바로 위에 적어두고, 정작 벽에 그대로 붙는 경로만 안 보던 것이다.
             if (!allowWallAnchors) return false;
-            if (requireClearHangOnWallAnchors && IsHangBlocked(hit.point)) return false;
+            // 수정: 견인 요청(requireClearHang == false)이면 이 검사를 건너뛴다 — 매달리지
+            // 않는 동작에 "매달렸을 때 벽에 박히는가"를 물을 이유가 없다.
+            if (requireClearHang && requireClearHangOnWallAnchors && IsHangBlocked(hit.point)) return false;
 
             return IsUsableAnchor(hit.point, minAnchorDistance);
         }
