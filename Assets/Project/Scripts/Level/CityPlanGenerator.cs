@@ -17,7 +17,7 @@ namespace Momentum.Level
     ///
     /// 전제: 생성기 오브젝트는 원점, 회전 0, 크기 1에 둔다. 모든 좌표가 기획서 좌표 그대로다.
     /// </summary>
-    public class CityPlanGenerator : MonoBehaviour
+    public partial class CityPlanGenerator : MonoBehaviour
     {
         private const string RootName = "_GeneratedPlanCity";
 
@@ -57,6 +57,55 @@ namespace Momentum.Level
             public PlanLot lot;
             public float yaw;
             public bool greybox;
+        }
+
+        /// <summary>도로 타일 한 장이 바닥에 차지하는 직사각형 (생성기 로컬 XZ).</summary>
+        private struct TileFootprint
+        {
+            public Vector2 center, dir, right;
+            public float halfLength, halfCross;
+
+            public Vector2 Corner(int i) =>
+                center + dir * ((i & 1) == 0 ? -halfLength : halfLength) + right * ((i & 2) == 0 ? -halfCross : halfCross);
+        }
+
+        /// <summary>
+        /// 기준선(origin, dir)을 따라 놓인 직사각형 띠. lat은 right 방향 거리, s는 dir 방향 거리.
+        /// 사선 대로처럼 축에 맞지 않는 영역을 블록 바닥에서 파내거나 메울 때 쓴다.
+        /// </summary>
+        private struct CutStrip
+        {
+            public Vector2 origin, dir, right;
+            public float latMin, latMax, s0, s1;
+
+            public CutStrip(Vector2 origin, Vector2 dir, Vector2 right, float latMin, float latMax, float s0, float s1)
+            {
+                this.origin = origin;
+                this.dir = dir;
+                this.right = right;
+                this.latMin = latMin;
+                this.latMax = latMax;
+                this.s0 = s0;
+                this.s1 = s1;
+            }
+        }
+
+        /// <summary>사선 대로 한 줄(차도 또는 한쪽 인도). 타일이 덮은 구간과, 못 덮은 곳을 메울 면의 사양.</summary>
+        private sealed class DiagonalLane
+        {
+            public string name;
+            public CutStrip area;
+            public float top;
+            public Material material;
+            public float uvSize = 6f;
+            public readonly List<CutStrip> covered = new List<CutStrip>();
+        }
+
+        /// <summary>사선 대로 전체. band는 블록 바닥에서 파낼 전체 폭(차도 + 양쪽 인도).</summary>
+        private sealed class DiagonalRoad
+        {
+            public CutStrip band;
+            public readonly List<DiagonalLane> lanes = new List<DiagonalLane>();
         }
 
         // ─── 중력 ───
@@ -127,30 +176,42 @@ namespace Momentum.Level
             var layout = BuildLayout();
 
             // 도로를 먼저 깐다. 차도가 y=0보다 얼마나 파였는지 재야 지면 높이를 정할 수 있다.
-            int roadTiles = CreateRoads(root.transform, groundLayer, out float recess);
+            int roadTiles = CreateRoads(root.transform, layout, groundLayer, out float recess, out DiagonalRoad diagonal);
             CreateGroundAndWater(root.transform, recess, groundLayer);
-            CreateSurfaces(root.transform, layout, groundLayer);
+            CreateSurfaces(root.transform, layout, groundLayer, diagonal);
 
             var built = new List<BuiltLot>();
+            PrepareWhiteCity(root.transform);
             CreateLotBuildings(root.transform, layout, anchorLayer, built);
             int walls = CreateDiagonalWalls(root.transform, layout, anchorLayer);
             int landmarks = CreateLandmarks(root.transform, anchorLayer);
             CreateRail(root.transform, anchorLayer);
             int trees = CreateTrees(root.transform, anchorLayer);
             int backdrop = CreateBackdrop(root.transform, anchorLayer);
-            CreateBoundary(root.transform);
+            CreateBoundary(root.transform, anchorLayer);
             int rails = CreateFrontageRails(root.transform, built, anchorLayer);
+            int roofProps = CreateRoofProps(root.transform, anchorLayer);
+            int streetProps = CreateStreetProps(root.transform, anchorLayer);
+            int clutter = CreateClutter(root.transform, layout);
 
             if (settings.markStatic) MarkStaticRecursive(root);
 
             int prefabTowers = 0;
-            foreach (var b in built) if (!b.greybox) prefabTowers++;
+            foreach (var b in built) if (b.lot.kind != PlanLotKind.Greybox) prefabTowers++;
+            int greyLots = built.Count - prefabTowers - whiteCityLotCount;
 
             Debug.Log($"[CityPlanGenerator] 건물 {built.Count + walls + landmarks}채 " +
-                      $"(프리팹 타워 {prefabTowers} · 회색 박스 필지 {built.Count - prefabTowers} · " +
+                      $"(프리팹 타워 {prefabTowers} · WhiteCity {whiteCityBuilt.Count} · 회색 박스 필지 {greyLots} · " +
                       $"사선 가로벽 {walls} · 랜드마크 {landmarks}) / 블록 {layout.blocks.Count} / " +
                       $"도로 타일 {roadTiles} / 나무 {trees} / 원경 {backdrop} / 옥상 난간 {rails} / " +
+                      $"옥상 소품 {roofProps} / 도로 소품 {streetProps} / 잡동사니 {clutter} / " +
                       $"최고 필지 {layout.TallestLot():F0} m", this);
+
+            if (whiteCityFallback > 0)
+            {
+                Debug.Log($"[CityPlanGenerator] WhiteCity에 맞는 건물이 없어 회색 박스로 남긴 자리 {whiteCityFallback}곳. " +
+                          "대부분 봉우리 근처의 아주 높은 필지다. whiteCityMaxStretch를 올리면 줄어든다.", this);
+            }
         }
 
         [ContextMenu("Clear")]
@@ -166,11 +227,13 @@ namespace Momentum.Level
         /// <summary>
         /// 애비뉴(차도 + 양쪽 인도 띠) → 스트리트 → 교차로 → 사선 대로 순으로 깐다.
         /// 광장 원 안의 타일은 건너뛴다 — 광장 바닥이 그 자리를 덮는다.
+        /// 사선 대로는 블록 하나 안에 통째로 들어가는 타일만 깔고, 덮은 구간을 <paramref name="diagonal"/>에 기록한다.
         /// </summary>
         /// <param name="recess">가장 깊이 파인 차도 표면 깊이. 지면 박스를 그보다 아래에 둔다.</param>
-        private int CreateRoads(Transform parent, int layer, out float recess)
+        private int CreateRoads(Transform parent, CityPlanLayout layout, int layer, out float recess, out DiagonalRoad diagonal)
         {
             recess = 0f;
+            diagonal = null;
             var roads = new GameObject("_Roads");
             roads.transform.SetParent(parent, false);
 
@@ -217,16 +280,27 @@ namespace Momentum.Level
                 return false;
             }
 
-            bool InAvenue(Vector2 p)
+            bool SkipPlaza(TileFootprint f) => InPlaza(f.center);
+
+            // 사선 타일은 블록 하나 안에 통째로 들어갈 때만 깐다. 애비뉴·스트리트·산책로에 조금이라도 걸치면
+            // 같은 높이 면끼리 겹쳐 z-fighting이 난다. 못 깐 자리는 바닥면 단계에서 메시로 메운다.
+            bool InsideOneBlock(TileFootprint f)
             {
-                foreach (var a in avenues)
+                const float e = 0.01f;
+                foreach (var b in layout.blocks)
                 {
-                    if (Mathf.Abs(p.x - a.centerX) < a.width * 0.5f) return true;
+                    bool all = true;
+                    for (int k = 0; k < 4 && all; k++)
+                    {
+                        Vector2 p = f.Corner(k);
+                        all = p.x >= b.x0 - e && p.x <= b.x1 + e && p.y >= b.z0 - e && p.y <= b.z1 + e;
+                    }
+                    if (all) return true;
                 }
                 return false;
             }
 
-            bool SkipDiagonal(Vector2 p) => InPlaza(p) || InAvenue(p);
+            bool SkipDiagonal(TileFootprint f) => InPlaza(f.center) || !InsideOneBlock(f);
 
             int placed = 0;
 
@@ -242,13 +316,13 @@ namespace Momentum.Level
 
                         var from = new Vector2(a.centerX, row.x);
                         var to = new Vector2(a.centerX, row.y);
-                        placed += LayRun(avenue, from, to, 0f, roads.transform, layer, InPlaza);
+                        placed += LayRun(avenue, from, to, 0f, roads.transform, layer, SkipPlaza);
 
                         if (hasStrip)
                         {
                             float offset = avenue.cross * 0.5f + strip.cross * 0.5f;
-                            placed += LayRun(strip, from, to, offset, roads.transform, layer, InPlaza);
-                            placed += LayRun(strip, from, to, -offset, roads.transform, layer, InPlaza);
+                            placed += LayRun(strip, from, to, offset, roads.transform, layer, SkipPlaza);
+                            placed += LayRun(strip, from, to, -offset, roads.transform, layer, SkipPlaza);
                         }
                     }
                 }
@@ -262,7 +336,7 @@ namespace Momentum.Level
                     foreach (var col in cols)
                     {
                         placed += LayRun(street, new Vector2(col.x, st.centerZ), new Vector2(col.y, st.centerZ),
-                                         0f, roads.transform, layer, InPlaza);
+                                         0f, roads.transform, layer, SkipPlaza);
                     }
                 }
             }
@@ -281,15 +355,57 @@ namespace Momentum.Level
                 }
             }
 
-            // 사선 대로 — 같은 4차선 타일을 사선 각도로 돌려 깐다. 애비뉴 위를 지나는 구간은 건너뛴다.
+            // 사선 대로 — 같은 4차선 타일을 사선 각도로 돌려 깐다. 타일이 덮은 구간을 줄마다 기록해 두면
+            // 바닥면 단계에서 블록 바닥을 띠 모양으로 파내고, 타일이 못 들어간 끝부분을 같은 높이 면으로 메운다.
             if (hasAvenue)
             {
-                placed += LayRun(avenue, settings.diagonalFrom, settings.diagonalTo, 0f, roads.transform, layer, SkipDiagonal);
-                if (hasStrip)
+                Vector2 from = settings.diagonalFrom, to = settings.diagonalTo;
+                float length = Vector2.Distance(from, to);
+                if (length > 0.01f)
                 {
-                    float offset = avenue.cross * 0.5f + strip.cross * 0.5f;
-                    placed += LayRun(strip, settings.diagonalFrom, settings.diagonalTo, offset, roads.transform, layer, SkipDiagonal);
-                    placed += LayRun(strip, settings.diagonalFrom, settings.diagonalTo, -offset, roads.transform, layer, SkipDiagonal);
+                    Vector2 dir = (to - from) / length;
+                    Vector2 right = new Vector2(dir.y, -dir.x); // LayRun의 lateral 방향과 같다
+                    float half = avenue.cross * 0.5f;
+                    float outer = half + (hasStrip ? strip.cross : 0f);
+                    diagonal = new DiagonalRoad { band = new CutStrip(from, dir, right, -outer, outer, 0f, length) };
+
+                    // 차도 메움 면은 교차로 아스팔트에서 잰다. 차선 무늬가 없어 월드 좌표로 반복해도 어색하지 않다.
+                    var asphalt = new DiagonalLane { name = "Asphalt", area = new CutStrip(from, dir, right, -half, half, 0f, length) };
+                    if (hasCross)
+                    {
+                        asphalt.uvSize = Mathf.Max(cross.size.x, cross.size.z);
+                        MeasureLane(asphalt, settings.intersectionPrefab, new Vector2(cross.center.x, cross.center.z),
+                                    roads.transform, avenue.bounds.min.y);
+                    }
+                    else
+                    {
+                        asphalt.uvSize = avenue.length;
+                        Vector2 lane = new Vector2(avenue.bounds.center.x, avenue.bounds.center.z) +
+                                       (avenue.crossIsX ? Vector2.right : Vector2.up) * (avenue.cross * 0.25f);
+                        MeasureLane(asphalt, avenue.prefab, lane, roads.transform, avenue.bounds.min.y);
+                    }
+                    placed += LayRun(avenue, from, to, 0f, roads.transform, layer, SkipDiagonal, asphalt.covered);
+                    diagonal.lanes.Add(asphalt);
+
+                    if (hasStrip)
+                    {
+                        float offset = half + strip.cross * 0.5f;
+                        for (int k = 0; k < 2; k++)
+                        {
+                            float sign = k == 0 ? 1f : -1f;
+                            var walk = new DiagonalLane
+                            {
+                                name = k == 0 ? "Sidewalk_R" : "Sidewalk_L",
+                                area = sign > 0f ? new CutStrip(from, dir, right, half, outer, 0f, length)
+                                                 : new CutStrip(from, dir, right, -outer, -half, 0f, length),
+                                uvSize = strip.cross,
+                            };
+                            MeasureLane(walk, strip.prefab, new Vector2(strip.bounds.center.x, strip.bounds.center.z),
+                                        roads.transform, strip.bounds.max.y);
+                            placed += LayRun(strip, from, to, offset * sign, roads.transform, layer, SkipDiagonal, walk.covered);
+                            diagonal.lanes.Add(walk);
+                        }
+                    }
                 }
             }
 
@@ -328,8 +444,9 @@ namespace Momentum.Level
         /// 억지로 끼우면 교차로 타일과 겹쳐 z-fighting이 나기 때문이다.
         /// </summary>
         /// <param name="lateral">진행 방향 오른쪽으로 띄울 거리. 인도 띠를 차도 옆에 붙일 때 쓴다.</param>
+        /// <param name="covered">연속으로 깐 타일 묶음마다 덮은 띠를 여기에 더한다 (사선 바닥 파내기용).</param>
         private int LayRun(TileSpec spec, Vector2 from, Vector2 to, float lateral, Transform parent, int layer,
-                           Func<Vector2, bool> skip)
+                           Func<TileFootprint, bool> skip, List<CutStrip> covered = null)
         {
             Vector2 span = to - from;
             float length = span.magnitude;
@@ -345,13 +462,39 @@ namespace Momentum.Level
             // 타일의 가로 축이 진행 방향에 수직이 되게 돌린다.
             float tileYaw = runYaw + (spec.crossIsX ? 0f : 90f);
 
-            int placed = 0;
-            for (int i = 0; i < count; i++)
+            int placed = 0, runStart = -1;
+            for (int i = 0; i <= count; i++)
             {
-                Vector2 c = from + dir * (pad + spec.length * (i + 0.5f)) + right * lateral;
-                if (skip != null && skip(c)) continue;
-                PlaceTile(spec.prefab, spec.bounds, c, tileYaw, parent, layer);
-                placed++;
+                bool laid = false;
+                if (i < count)
+                {
+                    var f = new TileFootprint
+                    {
+                        center = from + dir * (pad + spec.length * (i + 0.5f)) + right * lateral,
+                        dir = dir,
+                        right = right,
+                        halfLength = spec.length * 0.5f,
+                        halfCross = spec.cross * 0.5f,
+                    };
+                    if (skip == null || !skip(f))
+                    {
+                        PlaceTile(spec.prefab, spec.bounds, f.center, tileYaw, parent, layer);
+                        placed++;
+                        laid = true;
+                    }
+                }
+
+                if (laid)
+                {
+                    if (runStart < 0) runStart = i;
+                    continue;
+                }
+                if (runStart >= 0 && covered != null)
+                {
+                    covered.Add(new CutStrip(from, dir, right, lateral - spec.cross * 0.5f, lateral + spec.cross * 0.5f,
+                                             pad + spec.length * runStart, pad + spec.length * i));
+                }
+                runStart = -1;
             }
             return placed;
         }
@@ -399,6 +542,80 @@ namespace Momentum.Level
             if (settings.surfaceColliders) AddMeshColliders(tile, false);
         }
 
+        /// <summary>사선 메움 면의 높이·머티리얼을 실제 타일에서 잰다. 못 재면 바운즈 값과 첫 머티리얼로 대신한다.</summary>
+        private void MeasureLane(DiagonalLane lane, GameObject prefab, Vector2 at, Transform parent, float fallbackTop)
+        {
+            lane.top = fallbackTop;
+            lane.material = FirstMaterial(prefab);
+            if (!ProbeSurface(prefab, at, parent, out float top, out Material material)) return;
+            lane.top = top;
+            if (material != null) lane.material = material;
+        }
+
+        /// <summary>
+        /// 프리팹을 잠깐 놓고 위에서 레이를 쏴 실제 밟히는 면 높이와 그 면의 머티리얼을 잰다.
+        /// 바운즈 최저점은 메시 두께가 있으면 바닥 밑면이라 표면 높이로 믿을 수 없다.
+        /// </summary>
+        private bool ProbeSurface(GameObject prefab, Vector2 at, Transform parent, out float top, out Material material)
+        {
+            top = 0f;
+            material = null;
+            if (prefab == null) return false;
+
+            var probe = InstantiateLinked(prefab);
+            probe.transform.SetParent(parent, false);
+            probe.transform.localPosition = Vector3.zero;
+            probe.transform.localRotation = Quaternion.identity;
+
+            var added = new List<MeshCollider>();
+            foreach (var filter in probe.GetComponentsInChildren<MeshFilter>())
+            {
+                if (filter.sharedMesh == null) continue;
+                var mc = filter.gameObject.AddComponent<MeshCollider>();
+                mc.sharedMesh = filter.sharedMesh;
+                added.Add(mc);
+            }
+            Physics.SyncTransforms();
+
+            var ray = new Ray(parent.TransformPoint(new Vector3(at.x, 50f, at.y)), Vector3.down);
+            float best = float.MaxValue;
+            foreach (var mc in added)
+            {
+                if (!mc.Raycast(ray, out RaycastHit hit, 100f) || hit.distance >= best) continue;
+                best = hit.distance;
+                top = parent.InverseTransformPoint(hit.point).y;
+                material = MaterialAt(mc, hit.triangleIndex);
+            }
+
+            DestroyObject(probe);
+            return best < float.MaxValue;
+        }
+
+        /// <summary>레이가 맞은 삼각형이 속한 서브메시의 머티리얼.</summary>
+        private static Material MaterialAt(MeshCollider mc, int triangle)
+        {
+            var renderer = mc.GetComponent<Renderer>();
+            if (renderer == null) return null;
+            var materials = renderer.sharedMaterials;
+            var mesh = mc.sharedMesh;
+            if (mesh != null && triangle >= 0)
+            {
+                int index = triangle * 3;
+                for (int i = 0; i < mesh.subMeshCount && i < materials.Length; i++)
+                {
+                    var sub = mesh.GetSubMesh(i);
+                    if (index >= sub.indexStart && index < sub.indexStart + sub.indexCount) return materials[i];
+                }
+            }
+            return materials.Length > 0 ? materials[0] : null;
+        }
+
+        private static Material FirstMaterial(GameObject prefab)
+        {
+            var renderer = prefab != null ? prefab.GetComponentInChildren<Renderer>() : null;
+            return renderer != null ? renderer.sharedMaterial : null;
+        }
+
         // ─── 지면 · 강 · 바닥면 ───
 
         /// <summary>
@@ -412,7 +629,12 @@ namespace Momentum.Level
             root.transform.SetParent(parent, false);
 
             float groundTop = -recess - SurfaceEpsilon;
-            CreateSlab(root.transform, "Ground", settings.land, groundTop, 5f, settings.groundMaterial, groundLayer, true);
+            // 가장자리를 5 cm 들인다. 산책로 박스의 강 쪽 벽면과 지면 박스 옆면이 같은 평면에 놓여
+            // 강에서 안벽을 보면 z-fighting이 났다.
+            const float inset = 0.05f;
+            var land = settings.land;
+            var ground = new PlanRect(land.x0 + inset, land.x1 - inset, land.z0 + inset, land.z1 - inset);
+            CreateSlab(root.transform, "Ground", ground, groundTop, 5f, settings.groundMaterial, groundLayer, true);
 
             for (int i = 0; i < settings.water.Count; i++)
             {
@@ -436,7 +658,7 @@ namespace Momentum.Level
         /// 타일 수천 장 대신 박스 몇 개로 덮는다 — 산책로만 타일로 깔아도 3천 장이 넘어 에디터가 무거워진다.
         /// 산책로 박스는 강바닥까지 내려 그대로 안벽(岸壁)이 된다.
         /// </summary>
-        private void CreateSurfaces(Transform parent, CityPlanLayout layout, int groundLayer)
+        private void CreateSurfaces(Transform parent, CityPlanLayout layout, int groundLayer, DiagonalRoad diagonal)
         {
             var root = new GameObject("_Surfaces");
             root.transform.SetParent(parent, false);
@@ -447,9 +669,37 @@ namespace Momentum.Level
             CreateSlab(root.transform, "Promenade_West", settings.westPromenade, 0f, quayDepth, paving, groundLayer, true);
             CreateSlab(root.transform, "Promenade_South", settings.southPromenade, 0f, quayDepth, paving, groundLayer, true);
 
+            // 블록 마당은 박스 대신 메시로 세운다. 사선 대로가 지나는 블록은 그 띠를 파내야 하는데 박스로는
+            // 사선으로 자를 수 없다. 예전엔 박스 윗면(y=0)이 사선 인도 타일(y=0)과 겹쳐 z-fighting이 났고,
+            // 차도(y≈−0.15)는 박스 밑에 묻혀 보이지 않았다.
             foreach (var b in layout.blocks)
             {
-                CreateSlab(root.transform, $"Block_{b.id}", new PlanRect(b.x0, b.x1, b.z0, b.z1), 0f, 1f, paving, groundLayer, true);
+                var pieces = new List<List<Vector2>> { RectPolygon(b.x0, b.x1, b.z0, b.z1) };
+                if (diagonal != null) Subtract(pieces, diagonal.band);
+                CreateExtrusion(root.transform, $"Block_{b.id}", pieces, 0f, -1f, paving, settings.pavingUvSize, groundLayer);
+            }
+
+            // 사선 타일이 못 들어간 자리(애비뉴·광장에 비스듬히 닿는 끝부분)를 같은 높이 면으로 메운다.
+            // 메움 = (블록 ∩ 차선 띠) − 타일이 덮은 구간. 타일·메움·블록 바닥이 서로 한 치도 겹치지 않는다.
+            if (diagonal != null)
+            {
+                foreach (var lane in diagonal.lanes)
+                {
+                    var pieces = new List<List<Vector2>>();
+                    foreach (var b in layout.blocks)
+                    {
+                        var inside = ClipToStrip(RectPolygon(b.x0, b.x1, b.z0, b.z1), lane.area);
+                        if (inside.Count < 3 || PolygonArea(inside) < MinPieceArea) continue;
+                        var list = new List<List<Vector2>> { inside };
+                        foreach (var run in lane.covered) Subtract(list, run);
+                        pieces.AddRange(list);
+                    }
+                    if (pieces.Count > 0)
+                    {
+                        CreateExtrusion(root.transform, $"DiagonalFill_{lane.name}", pieces, lane.top, lane.top - 0.3f,
+                                        lane.material, lane.uvSize, groundLayer);
+                    }
+                }
             }
 
             CreateSlab(root.transform, "Park", settings.park, 0f, 1f, Pick(settings.parkMaterial, paving), groundLayer, true);
@@ -512,8 +762,18 @@ namespace Momentum.Level
 
                 if (greybox)
                 {
-                    go = CreateGreyboxVolume(lot.id, lot.x1 - lot.x0 - LotGap, lot.z1 - lot.z0 - LotGap,
-                                             lot.height, GreyboxMaterial(orient));
+                    // WhiteCity 건물을 먼저 시도하고, 맞는 게 없으면 회색 박스로 남긴다.
+                    float sizeX = lot.x1 - lot.x0 - LotGap, sizeZ = lot.z1 - lot.z0 - LotGap;
+                    go = TryCreateWhiteCity(lot.id, sizeX, sizeZ, lot.height, orient);
+                    if (go != null)
+                    {
+                        greybox = false; // 옥상 난간을 레이로 찾게
+                        whiteCityLotCount++;
+                    }
+                    else
+                    {
+                        go = CreateGreyboxVolume(lot.id, sizeX, sizeZ, lot.height, GreyboxMaterial(orient));
+                    }
                     go.transform.SetParent(root.transform, false);
                     go.transform.localPosition = new Vector3(lot.Center.x, 0f, lot.Center.y);
                 }
@@ -686,8 +946,10 @@ namespace Momentum.Level
             for (int i = 0; i < layout.diagonalWalls.Count; i++)
             {
                 var w = layout.diagonalWalls[i];
-                var go = CreateGreyboxVolume($"{w.id}_{w.height:F0}m", w.depth, w.length, w.height,
-                                             GreyboxMaterial(new PlanRandom(settings.orientationSeed ^ (i * 104729))));
+                var rng = new PlanRandom(settings.orientationSeed ^ (i * 104729));
+                string id = $"{w.id}_{w.height:F0}m";
+                var go = settings.whiteCityOnDiagonalWalls ? TryCreateWhiteCity(id, w.depth, w.length, w.height, rng) : null;
+                if (go == null) go = CreateGreyboxVolume(id, w.depth, w.length, w.height, GreyboxMaterial(rng));
                 go.transform.SetParent(root.transform, false);
                 go.transform.localPosition = new Vector3(w.center.x, 0f, w.center.y);
                 go.transform.localRotation = Quaternion.Euler(0f, w.yawDeg, 0f);
@@ -753,16 +1015,26 @@ namespace Momentum.Level
 
             var deck = settings.railDeck;
             var material = Pick(settings.railMaterial, GreyboxMaterial(new PlanRandom(2)));
-            CreateSlab(root.transform, "Deck", deck, settings.railDeckTop, settings.railDeckThickness, material, anchorLayer, true);
 
-            float pillarTop = settings.railDeckTop - settings.railDeckThickness;
+            // 프리팹 칸이 채워져 있으면 교체하고, 비어 있으면 회색 박스 그대로. 상판·기둥을 따로 판단한다.
+            float deckBottom = settings.railDeckTop - settings.railDeckThickness;
+            float kitScale = 0f;
+            if (!TryLayElevatedDeck(root.transform, anchorLayer, ref deckBottom, ref kitScale))
+                CreateSlab(root.transform, "Deck", deck, settings.railDeckTop, settings.railDeckThickness, material, anchorLayer, true);
+
+            Bounds pillarBounds = default;
+            bool pillarPrefab = settings.elevatedPillarPrefab != null &&
+                                TryMeasurePrefab(settings.elevatedPillarPrefab, root.transform, out pillarBounds);
             float half = settings.railPillarSize * 0.5f;
             float cx = deck.Center.x;
             int k = 0;
             for (float z = deck.z0; z <= deck.z1 + 0.01f; z += settings.railPillarSpacing, k++)
             {
-                CreateSlab(root.transform, $"Pillar_{k:00}", new PlanRect(cx - half, cx + half, z - half, z + half),
-                           pillarTop, pillarTop, material, anchorLayer, true);
+                if (pillarPrefab)
+                    PlaceElevatedPillar(root.transform, pillarBounds, new Vector2(cx, z), deckBottom, kitScale, anchorLayer, k);
+                else
+                    CreateSlab(root.transform, $"Pillar_{k:00}", new PlanRect(cx - half, cx + half, z - half, z + half),
+                               deckBottom, deckBottom, material, anchorLayer, true);
             }
         }
 
@@ -777,6 +1049,7 @@ namespace Momentum.Level
             root.transform.SetParent(parent, false);
 
             var rng = new PlanRandom(settings.treeSeed);
+            PrepareTreeFit(root.transform);
             var p = settings.park;
             float inset = settings.treeInset;
             float spacing = Mathf.Max(1f, settings.treeSpacing);
@@ -804,6 +1077,7 @@ namespace Momentum.Level
                 tree = InstantiateLinked(settings.treePrefab);
                 tree.transform.SetParent(parent, false);
                 tree.transform.localRotation = Quaternion.Euler(0f, (index * 137.5f) % 360f, 0f);
+                tree.transform.localScale *= treeScale;
                 AddMeshColliders(tree, true);
             }
             else
@@ -834,7 +1108,7 @@ namespace Momentum.Level
             }
 
             tree.name = $"Tree_{index:000}";
-            tree.transform.localPosition = new Vector3(at.x, 0f, at.y);
+            tree.transform.localPosition = new Vector3(at.x, settings.treePrefab != null ? treeLift : 0f, at.y);
             if (anchorLayer >= 0) SetLayerRecursive(tree, anchorLayer);
         }
 
@@ -874,10 +1148,12 @@ namespace Momentum.Level
         }
 
         /// <summary>
-        /// 맵 바깥 투명 경계. 렌더러 없이 충돌체만 둔다.
-        /// Default 레이어라 웹은 붙지 않는다 — 보이지 않는 벽에 매달리는 일이 없게.
+        /// 땅과 강을 모두 감싸는 경계벽. 도시 어디서 봐도 맵 바깥(빈 공간)이 보이지 않게 막는다.
+        /// 벽 하나가 시야 차단과 충돌을 같이 맡는다. 강 쪽은 강바닥 아래까지 내려 수면 밑 틈도 막는다.
+        /// 그림자를 끈다 — 300 m 벽이 해 각도에 따라 도시 절반을 덮기 때문이다.
+        /// 기본은 Default 레이어라 웹이 붙지 않는다 (맵 끝 벽을 타고 도는 플레이 방지, 설정에서 바꿀 수 있다).
         /// </summary>
-        private void CreateBoundary(Transform parent)
+        private void CreateBoundary(Transform parent, int anchorLayer)
         {
             var root = new GameObject("_Boundary");
             root.transform.SetParent(parent, false);
@@ -893,20 +1169,33 @@ namespace Momentum.Level
                 maxZ = Mathf.Max(maxZ, w.z1);
             }
 
-            float h = settings.boundaryHeight;
-            const float t = 5f;
-            Wall("West", new Vector3(minX - t * 0.5f, h * 0.5f, (minZ + maxZ) * 0.5f), new Vector3(t, h, maxZ - minZ));
-            Wall("East", new Vector3(maxX + t * 0.5f, h * 0.5f, (minZ + maxZ) * 0.5f), new Vector3(t, h, maxZ - minZ));
-            Wall("South", new Vector3((minX + maxX) * 0.5f, h * 0.5f, minZ - t * 0.5f), new Vector3(maxX - minX + t * 2f, h, t));
-            Wall("North", new Vector3((minX + maxX) * 0.5f, h * 0.5f, maxZ + t * 0.5f), new Vector3(maxX - minX + t * 2f, h, t));
+            float top = settings.boundaryHeight;
+            float bottom = Mathf.Min(settings.riverbedY, 0f) - 2f;
+            float h = top - bottom;
+            float cy = bottom + h * 0.5f;
+            float t = Mathf.Max(0.5f, settings.outerWallThickness);
+            var material = Pick(settings.outerWallMaterial, settings.backdropMaterial);
+            int layer = settings.outerWallAnchorable && anchorLayer >= 0 ? anchorLayer : -1;
+
+            // 동·서 벽은 Z 범위만, 남·북 벽은 두께만큼 양 끝을 늘려 모서리를 덮는다 — 모서리에서 두 벽 면이 겹치지 않게.
+            Wall("West", new Vector3(minX - t * 0.5f, cy, (minZ + maxZ) * 0.5f), new Vector3(t, h, maxZ - minZ));
+            Wall("East", new Vector3(maxX + t * 0.5f, cy, (minZ + maxZ) * 0.5f), new Vector3(t, h, maxZ - minZ));
+            Wall("South", new Vector3((minX + maxX) * 0.5f, cy, minZ - t * 0.5f), new Vector3(maxX - minX + t * 2f, h, t));
+            Wall("North", new Vector3((minX + maxX) * 0.5f, cy, maxZ + t * 0.5f), new Vector3(maxX - minX + t * 2f, h, t));
 
             void Wall(string side, Vector3 center, Vector3 size)
             {
-                var go = new GameObject($"Boundary_{side}");
+                var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                go.name = $"Boundary_{side}";
                 go.transform.SetParent(root.transform, false);
                 go.transform.localPosition = center;
-                var box = go.AddComponent<BoxCollider>();
-                box.size = size;
+                go.transform.localScale = size;
+
+                var renderer = go.GetComponent<MeshRenderer>();
+                if (material != null) renderer.sharedMaterial = material;
+                renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                renderer.enabled = settings.outerWallVisible;
+                if (layer >= 0) go.layer = layer;
             }
         }
 
@@ -1004,6 +1293,164 @@ namespace Momentum.Level
                 placed++;
             }
             return placed;
+        }
+
+        // ─── 다각형 (사선 자르기) ───
+
+        /// <summary>이보다 작은 조각은 버린다. 부동소수 오차로 생기는 실오라기 면을 거르는 기준(m²).</summary>
+        private const float MinPieceArea = 0.01f;
+
+        /// <summary>위에서 볼 때 반시계 방향 사각형. 잘라도 방향이 유지되어 메시 앞면 판정이 일정하다.</summary>
+        private static List<Vector2> RectPolygon(float x0, float x1, float z0, float z1) =>
+            new List<Vector2> { new Vector2(x0, z0), new Vector2(x1, z0), new Vector2(x1, z1), new Vector2(x0, z1) };
+
+        /// <summary>반평면 dot(p, n) ≥ k 쪽만 남긴다 (Sutherland–Hodgman 한 단계). 볼록 다각형은 볼록으로 남는다.</summary>
+        private static List<Vector2> ClipHalfPlane(List<Vector2> poly, Vector2 n, float k)
+        {
+            var result = new List<Vector2>(poly.Count + 2);
+            for (int i = 0; i < poly.Count; i++)
+            {
+                Vector2 a = poly[i], b = poly[(i + 1) % poly.Count];
+                float da = Vector2.Dot(a, n) - k, db = Vector2.Dot(b, n) - k;
+                if (da >= 0f) result.Add(a);
+                if ((da >= 0f) != (db >= 0f)) result.Add(a + (b - a) * (da / (da - db)));
+            }
+            return result;
+        }
+
+        private static List<Vector2> ClipToStrip(List<Vector2> poly, CutStrip s)
+        {
+            float dr = Vector2.Dot(s.origin, s.right), du = Vector2.Dot(s.origin, s.dir);
+            poly = ClipHalfPlane(poly, s.right, s.latMin + dr);
+            poly = ClipHalfPlane(poly, -s.right, -(s.latMax + dr));
+            poly = ClipHalfPlane(poly, s.dir, s.s0 + du);
+            return ClipHalfPlane(poly, -s.dir, -(s.s1 + du));
+        }
+
+        /// <summary>
+        /// 볼록 다각형 목록에서 띠를 뺀다. 볼록 하나에서 띠를 빼면 볼록 조각 최대 4개(띠 오른쪽·왼쪽·앞·뒤)가 남는다.
+        /// 오목 다각형을 만들지 않고 볼록 조각으로만 유지하면 삼각형 분할이 부채꼴 한 번으로 끝난다.
+        /// </summary>
+        private static void Subtract(List<List<Vector2>> polys, CutStrip s)
+        {
+            float dr = Vector2.Dot(s.origin, s.right), du = Vector2.Dot(s.origin, s.dir);
+            for (int i = polys.Count - 1; i >= 0; i--)
+            {
+                var poly = polys[i];
+                var overlap = ClipToStrip(poly, s);
+                if (overlap.Count < 3 || PolygonArea(overlap) < MinPieceArea) continue;
+
+                polys.RemoveAt(i);
+                AddPiece(polys, ClipHalfPlane(poly, s.right, s.latMax + dr));
+                AddPiece(polys, ClipHalfPlane(poly, -s.right, -(s.latMin + dr)));
+                var mid = ClipHalfPlane(ClipHalfPlane(poly, s.right, s.latMin + dr), -s.right, -(s.latMax + dr));
+                AddPiece(polys, ClipHalfPlane(mid, -s.dir, -(s.s0 + du)));
+                AddPiece(polys, ClipHalfPlane(mid, s.dir, s.s1 + du));
+            }
+        }
+
+        private static void AddPiece(List<List<Vector2>> polys, List<Vector2> piece)
+        {
+            if (piece.Count >= 3 && PolygonArea(piece) >= MinPieceArea) polys.Add(piece);
+        }
+
+        private static float PolygonArea(List<Vector2> poly)
+        {
+            float a = 0f;
+            for (int i = 0; i < poly.Count; i++)
+            {
+                Vector2 p = poly[i], q = poly[(i + 1) % poly.Count];
+                a += p.x * q.y - q.x * p.y;
+            }
+            return Mathf.Abs(a) * 0.5f;
+        }
+
+        /// <summary>볼록 조각들을 윗면 + 옆면 메시 하나로 세운다. 메시 충돌체를 같이 단다.</summary>
+        private static GameObject CreateExtrusion(Transform parent, string name, List<List<Vector2>> polygons, float top, float bottom,
+                                                  Material material, float uvSize, int layer)
+        {
+            var go = new GameObject(name);
+            go.transform.SetParent(parent, false);
+            var mesh = BuildExtrusionMesh(polygons, top, bottom, uvSize);
+            mesh.name = name;
+            go.AddComponent<MeshFilter>().sharedMesh = mesh;
+            go.AddComponent<MeshRenderer>().sharedMaterial = material != null ? material : DefaultMaterial();
+            go.AddComponent<MeshCollider>().sharedMesh = mesh;
+            if (layer >= 0) go.layer = layer;
+            return go;
+        }
+
+        /// <summary>
+        /// 윗면 UV는 월드 XZ 기준이라 조각 경계에서 무늬가 끊기지 않는다.
+        /// 유니티 앞면은 시계 방향이라 반시계 다각형을 (0, i+1, i) 순서로 묶는다.
+        /// 옆면은 단차(블록 바닥 0 → 차도 −0.15)에서 연석 면이 된다.
+        /// </summary>
+        private static Mesh BuildExtrusionMesh(List<List<Vector2>> polygons, float top, float bottom, float uvSize)
+        {
+            var verts = new List<Vector3>();
+            var uvs = new List<Vector2>();
+            var tris = new List<int>();
+            float inv = 1f / Mathf.Max(0.01f, uvSize);
+
+            foreach (var poly in polygons)
+            {
+                int n = poly.Count;
+                if (n < 3) continue;
+
+                int b0 = verts.Count;
+                foreach (var p in poly)
+                {
+                    verts.Add(new Vector3(p.x, top, p.y));
+                    uvs.Add(p * inv);
+                }
+                for (int i = 1; i < n - 1; i++)
+                {
+                    tris.Add(b0);
+                    tris.Add(b0 + i + 1);
+                    tris.Add(b0 + i);
+                }
+
+                if (bottom >= top) continue;
+                float run = 0f;
+                for (int i = 0; i < n; i++)
+                {
+                    Vector2 a = poly[i], c = poly[(i + 1) % n];
+                    float len = Vector2.Distance(a, c);
+                    int s = verts.Count;
+                    verts.Add(new Vector3(a.x, top, a.y));
+                    verts.Add(new Vector3(c.x, top, c.y));
+                    verts.Add(new Vector3(c.x, bottom, c.y));
+                    verts.Add(new Vector3(a.x, bottom, a.y));
+                    uvs.Add(new Vector2(run, top) * inv);
+                    uvs.Add(new Vector2(run + len, top) * inv);
+                    uvs.Add(new Vector2(run + len, bottom) * inv);
+                    uvs.Add(new Vector2(run, bottom) * inv);
+                    tris.Add(s); tris.Add(s + 1); tris.Add(s + 2);
+                    tris.Add(s); tris.Add(s + 2); tris.Add(s + 3);
+                    run += len;
+                }
+            }
+
+            var mesh = new Mesh();
+            if (verts.Count > 65000) mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
+            mesh.SetVertices(verts);
+            mesh.SetUVs(0, uvs);
+            mesh.SetTriangles(tris, 0);
+            mesh.RecalculateNormals();
+            mesh.RecalculateBounds();
+            return mesh;
+        }
+
+        private static Material defaultMaterial;
+
+        /// <summary>머티리얼 칸이 비었을 때 프리미티브와 같은 기본 머티리얼을 쓴다 (분홍색 방지).</summary>
+        private static Material DefaultMaterial()
+        {
+            if (defaultMaterial != null) return defaultMaterial;
+            var temp = GameObject.CreatePrimitive(PrimitiveType.Quad);
+            defaultMaterial = temp.GetComponent<MeshRenderer>().sharedMaterial;
+            DestroyObject(temp);
+            return defaultMaterial;
         }
 
         // ─── 공용 도우미 ───
