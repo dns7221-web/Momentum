@@ -18,8 +18,16 @@ namespace Momentum.Player
     public class GrappleGun : MonoBehaviour
     {
         [Header("사거리")]
-        [Tooltip("로프 길이. 이보다 먼 곳에는 붙지 않는다. 프리셋의 ropeLength와 같은 값을 쓴다.")]
+        [Tooltip("로프 길이. 이보다 먼 곳에는 붙지 않는다. 아래 '사거리 기준 에셋'이 채워져 있으면 " +
+                 "이 칸은 무시되고 그 에셋의 webRange로 덮어쓴다.")]
         [Min(1f)][SerializeField] private float maxRange = 22f;
+
+        // 추가 생성 — 사거리의 기준을 한 곳으로 모은다.
+        [Tooltip("도시 기획 에셋(CityPlan_v3). 채워두면 maxRange를 그 에셋의 webRange로 맞춘다.\n\n" +
+                 "도시의 건물 높이·애비뉴 폭이 webRange에서 계산되므로, 플레이어가 다른 값을 들고 있으면 " +
+                 "아치 최저점이 땅에 닿는 식으로 어긋난다. 비워두면 위 maxRange를 그대로 쓴다 " +
+                 "(옛 격자 도시로 비교 실험할 때).")]
+        [SerializeField] private Level.CityPlanSettings rangeSource = null;
         [Tooltip("갈고리가 걸리는 레이어. Ground는 반드시 빠져 있어야 한다 — " +
                  "아스팔트에 붙으면 스윙이 아니라 지면 견인이 된다.")]
         [SerializeField] private LayerMask anchorMask;
@@ -296,6 +304,9 @@ namespace Momentum.Player
 
         private void Awake()
         {
+            // 추가 생성 — 다른 초기화보다 먼저 사거리를 확정한다. 실행 중에는 이 값이 기준이다.
+            SyncRangeFromSource();
+
             _rb = GetComponent<Rigidbody>();
             _movement = GetComponent<PlayerMovement>();
             if (aimCamera == null) aimCamera = Camera.main;
@@ -325,6 +336,27 @@ namespace Momentum.Player
             }
 
             SetRopeVisible(false);
+        }
+
+        // 추가 생성
+        /// <summary>
+        /// 사거리 기준 에셋이 있으면 maxRange를 그 값으로 맞춘다.
+        /// 실행 시(Awake)와 에디터에서 값이 바뀔 때(OnValidate) 두 곳에서 부른다.
+        /// </summary>
+        private void SyncRangeFromSource()
+        {
+            if (rangeSource == null) return;
+            maxRange = rangeSource.webRange;
+        }
+
+        // 추가 생성
+        /// <summary>
+        /// 유니티가 에디터에서 이 컴포넌트의 인스펙터 값이 바뀌거나 스크립트가 다시 컴파일될 때 부른다.
+        /// 덕분에 Play를 누르지 않아도 인스펙터의 maxRange 칸에 실제로 쓰일 값이 보인다.
+        /// </summary>
+        private void OnValidate()
+        {
+            SyncRangeFromSource();
         }
 
         // ─── 입력 ───
