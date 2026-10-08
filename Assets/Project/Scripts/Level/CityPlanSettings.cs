@@ -145,6 +145,17 @@ namespace Momentum.Level
         }
     }
 
+    /// <summary>지상 잡동사니 한 종류. Kenney처럼 작은 모델을 실측해 목표 길이로 키운다.</summary>
+    [Serializable]
+    public class PlanProp
+    {
+        public GameObject prefab;
+        [Tooltip("가장 긴 수평 변을 이 길이(m)로 맞춘다. 0이면 원래 크기. 예: 컨테이너 6, 트럭 7, 팔레트 1.2.")]
+        [Min(0f)] public float length = 0f;
+        [Tooltip("뽑힐 비중. 0이면 쓰지 않는다.")]
+        [Min(0f)] public float weight = 1f;
+    }
+
     /// <summary>
     /// 기획 v3 "방향이 보이는 도시"의 도로망·특수 요소·필지 규칙을 담는 에셋.
     ///
@@ -245,8 +256,13 @@ namespace Momentum.Level
         [Min(1f)] public float backdropSegment = 20f;
         [Tooltip("원경 박스 높이 범위 (최소, 최대).")]
         public Vector2 backdropHeight = new Vector2(60f, 120f);
-        [Tooltip("보이지 않는 바깥 경계벽 높이. 원경보다 높이 날아도 맵 밖으로 못 나가게.")]
+        [Tooltip("땅과 강을 감싸는 경계벽 높이. 도시 어디서 봐도 밖이 안 보이도록 랜드마크(171 m)보다 충분히 높게 둔다.")]
         [Min(10f)] public float boundaryHeight = 300f;
+        [Tooltip("경계벽을 보이게 한다. 끄면 예전처럼 충돌체만 남는다.")]
+        public bool outerWallVisible = true;
+        [Min(0.5f)] public float outerWallThickness = 5f;
+        [Tooltip("경계벽에 웹이 붙게 할지. 기본은 끔 — 맵 끝 벽을 타고 도는 플레이를 막는다.")]
+        public bool outerWallAnchorable = false;
 
         [Header("필지 규칙")]
         [Tooltip("블록 둘레 필지의 깊이(m). 블록 폭 60에서 양쪽 20씩 빼면 가운데 20 m가 빈 마당이 된다.")]
@@ -349,6 +365,68 @@ namespace Momentum.Level
 
         [Header("공원 나무 프리팹 (비우면 회색 기둥 + 구)")]
         public GameObject treePrefab;
+        [Tooltip("나무 프리팹을 treeHeight에 맞춰 키운다. Kenney 나무처럼 작은 모델용.")]
+        public bool treeFitHeight = true;
+
+        [Header("WhiteCity 건물 (회색 박스 대체) — 비우면 회색 박스 그대로")]
+        [Tooltip("WhiteCity/Prefabs/Buildings의 건물들. 필지마다 가장 잘 맞는 것을 골라 높이를 맞춰 세운다.")]
+        public List<GameObject> whiteCityBuildings = new List<GameObject>();
+        [Tooltip("세로로만 늘이는 한계. 1.8이면 원래 비율보다 1.8배 길쭉하거나 납작한 것까지 허용. 넘으면 회색 박스로 남는다.")]
+        [Range(1f, 4f)] public float whiteCityMaxStretch = 1.8f;
+        [Tooltip("필지에 맞춰 바닥을 키우거나 줄이는 배율 범위 (최소, 최대).")]
+        public Vector2 whiteCityFootprintScale = new Vector2(0.5f, 2f);
+        [Tooltip("필지를 얼마나 채울지. 1이면 필지 경계까지 꽉 채운다.")]
+        [Range(0.5f, 1f)] public float whiteCityFill = 0.92f;
+        [Tooltip("사선 대로 가로벽도 WhiteCity로 세운다.")]
+        public bool whiteCityOnDiagonalWalls = true;
+        public int whiteCitySeed = 1357;
+
+        [Header("옥상 소품 (WhiteCity/Prefabs/Roof) — WhiteCity 건물 위에만")]
+        public List<GameObject> roofPropPrefabs = new List<GameObject>();
+        [Tooltip("건물 하나당 개수 (최소, 최대).")]
+        public Vector2Int roofPropsPerBuilding = new Vector2Int(0, 3);
+        [Min(0f)] public float roofPropEdgeMargin = 2f;
+        [Tooltip("소품에 충돌체를 단다. 끄면 보이기만 하고 착지에 걸리지 않는다.")]
+        public bool roofPropColliders = false;
+
+        [Header("도로 소품 (Kenney city-kit-roads) — 빈 칸은 건너뛴다")]
+        [Tooltip("light-curved 등. 피벗(기둥 밑)을 기준으로 세운다.")]
+        public GameObject streetLightPrefab;
+        [Min(1f)] public float streetLightHeight = 8f;
+        [Min(4f)] public float streetLightSpacing = 24f;
+        [Tooltip("팔이 차도를 향하지 않으면 90 / 180 / 270으로 바꿔본다. 모델마다 앞 방향이 다르다.")]
+        public float streetLightYawOffset = 0f;
+        [Tooltip("traffic-light 등.")]
+        public GameObject trafficLightPrefab;
+        [Min(1f)] public float trafficLightHeight = 6f;
+        public float trafficLightYawOffset = 0f;
+        [Tooltip("sign-highway-wide 등. 애비뉴 폭에 맞춰 가로지르게 세운다.")]
+        public GameObject gantryPrefab;
+        public string gantryAvenue = "A3";
+        [Tooltip("갠트리를 걸 Z 좌표들. 광장·공원 안이면 건너뛴다.")]
+        public List<float> gantryZ = new List<float> { -330f, -180f, 20f };
+        [Min(1f)] public float gantryHeight = 8f;
+        public float gantryYawOffset = 0f;
+        [Tooltip("도로 소품에 웹이 붙게 할지. 기본은 끔 — 지면 근처에서 웹이 걸리지 않게.")]
+        public bool streetPropsAnchorable = false;
+
+        [Header("고가 구조물 프리팹 — 비우면 회색 박스")]
+        [Tooltip("road-bridge 등. 상판 폭에 맞춰 상판 길이만큼 이어 깔다.")]
+        public GameObject elevatedDeckPrefab;
+        [Tooltip("bridge-pillar 등. 상판 밑면까지 늘여 세운다.")]
+        public GameObject elevatedPillarPrefab;
+        [Tooltip("난간이 진행 방향을 가로막으면 90으로 바꾼다.")]
+        public float elevatedDeckYawOffset = 0f;
+
+        [Header("지상 잡동사니 (Kenney retro-urban) — 비우면 건너뛴다")]
+        [Tooltip("부두: 컨테이너·트럭·팔레트. 잔교 위 한 줄 + 뒤쪽 하역장.")]
+        public List<PlanProp> dockProps = new List<PlanProp>();
+        [Min(0f)] public float dockPropGap = 2f;
+        [Range(0f, 1f)] public float dockPropSkipChance = 0.25f;
+        [Tooltip("블록 안쪽 빈 마당: 쓰레기통·울타리·팔레트.")]
+        public List<PlanProp> yardProps = new List<PlanProp>();
+        [Min(0)] public int yardPropsPerBlock = 4;
+        public int clutterSeed = 2024;
 
         [Header("머티리얼 (비우면 아래 대체값)")]
         [Tooltip("회색 박스 필지·사선 가로벽에 번갈아 쓴다. 여러 개 넣으면 반복감이 준다.")]
@@ -362,6 +440,10 @@ namespace Momentum.Level
         public Material waterMaterial;
         public Material railMaterial;
         public Material treeMaterial;
+        [Tooltip("경계벽. 하늘·안개 색 단색(Unlit)을 넣으면 벽이 아니라 먼 안개처럼 보인다. 비우면 원경 머티리얼.")]
+        public Material outerWallMaterial;
+        [Tooltip("블록 바닥 텍스처 한 장이 덮는 거리(m).")]
+        [Min(0.1f)] public float pavingUvSize = 10f;
 
         [Header("성능")]
         [Tooltip("생성물을 Static으로 표시해 정적 배칭을 받는다.")]
