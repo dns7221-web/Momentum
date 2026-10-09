@@ -100,6 +100,12 @@ namespace Momentum.Player
         [Tooltip("실제 로프가 목표 길이를 따라가는 속도(m/s). 이 값이 곧 벽을 타고 오르는 속도다.")]
         [Min(0.1f)][SerializeField] private float reelSpeed = 8f;
 
+        /// <summary>
+        /// 감기 입력 액션(마우스 휠). <see cref="WebSlingshot"/>이 지상에서 같은 휠로 충전하므로,
+        /// 슬링샷 쪽 칸이 비어 있으면 이걸 빌려 간다 — GrappleZip.ZipAction과 같은 이유다.
+        /// </summary>
+        public InputActionReference ReelAction => reelAction;
+
         [Header("애니메이션")]
         [Tooltip("Swing 레이어 가중치가 오르내리는 속도(초당). 0이면 즉시 전환된다 — " +
                  "붙는 순간 자세가 뚝 끊겨서 대개 부자연스럽다.")]

@@ -1821,3 +1821,22 @@ airLoopVariants -> Floating
 **중력은 9.81이 아니라 14.7이다** — 생성기가 `gravityScale 1.5`로 덮어쓴다. 처음 9.81로 계산해
 "36m에 약 27 m/s"라고 했는데 실제로는 **약 34 m/s**가 필요해 `maxLaunchSpeed`를 38로 잡았다.
 `DynamicsManager.asset`만 보고 중력을 읽으면 틀린다.
+
+### 웹 슬링샷 충전을 "반대로 달리기"에서 "조준 + 휠 감기"로 — 2026-10-09
+
+반대로 달리는 동안 보이는 애니메이션이 걷기뿐이었고, 몸이 건물 반대쪽을 보고 있어 발사 순간
+180° 홱 돌았다. 충전 방식을 바꿨다. 발사 계산(`Launch`, `SolveApexVelocity`)은 그대로다.
+
+| 결정 | 이유 |
+|---|---|
+| 우클릭 = 부착 + 권총 양손 조준, 휠 = 충전 | 충전 중 무엇을 하는지 자세로 보인다. 제자리라 건물에서 멀어지지 않아 결과가 예측 가능하고, 골목에서도 쓸 수 있다 |
+| 휠은 기존 `Reel` 액션 공유(빈 칸이면 `SwingConstraint.ReelAction`을 빌림) | 슬링샷은 지상, 스윙은 공중 전용이라 겹치지 않는다. 공유 액션이라 Enable만 하고 Disable은 안 한다 |
+| 휠 값은 부호만 | 윈도우는 한 칸에 120 — 크기를 믿으면 기계마다 충전 속도가 다르다(`SwingConstraint`와 같은 규칙) |
+| 휠은 `Update`에서 읽는다 | 한 칸은 한 프레임에만 들어온다. 물리 스텝이 0번 도는 프레임에 읽으면 놓친다 |
+| 허리 젖힘은 1D 블렌드 트리(`Aim_Idle` ↔ `Aim_Point_U90`) | 뼈 하나를 코드로 돌리면 손·총·머리가 어긋난다. 애니메이터가 포즈 전체를 섞는다 |
+| 보이는 충전량은 `MoveTowards`로 따라간다 | 휠이 칸 단위라 그대로 넣으면 몸이 툭툭 끊겨 젖혀진다 |
+| 조준 중 정지·회전은 `SuspendHorizontalControl` 없이 실행 순서 100에서 덮는다 | 그 스위치를 놓으면 PlayerMovement가 "스윙을 놓았다"로 읽어 스윙 착지 플래그를 켠다. 땅에서 취소해도 켜진다 |
+| 착지 전용 코드는 없다 | 비행 종료 시 스위치를 돌려주는 것이 이미 스윙 착지(`swingLand`) 경로를 탄다 |
+| Animator 파라미터는 `SlingBegin`/`SlingLaunch` Trigger | Any State 전이는 조건이 참인 동안 매 프레임 다시 걸린다. Bool이면 첫 프레임에 갇힌다 |
+
+삭제: `maxStretch`, `pullResistance`, `_restLength`, `ApplyPullResistance()`.

@@ -75,6 +75,19 @@ namespace Momentum.Player
                  "우클릭인데 스윙 자세가 같이 나오던 원인이 이것이다.")]
         public AnimationClip zipLoop;
 
+        [Header("웹 슬링샷 (지상 우클릭 + 휠) — slingAim을 비우면 슬링샷 레이어를 만들지 않는다")]
+        [Tooltip("충전 0%: 권총을 양손으로 겨눈 자세. 권총 팩의 W1_Stand_Aim_Idle_IPC.\n\n" +
+                 "In-Place(IPC) 버전을 쓴다 — 조준 중엔 WebSlingshot이 몸을 제자리에 세우므로 " +
+                 "클립이 루트를 움직이면 발이 미끄러진다.")]
+        public AnimationClip slingAim;
+        [Tooltip("충전 100%: 위로 겨눠 허리가 뒤로 젖혀진 자세. 권총 팩의 W1_Stand_Aim_Point_U90.\n\n" +
+                 "휠을 굴릴수록 slingAim과 이 자세가 1D 블렌드 트리로 섞인다 — 충전량이 곧 젖혀진 정도다. " +
+                 "비우면 slingAim 하나로 고정(젖혀지지 않음).")]
+        public AnimationClip slingAimMax;
+        [Tooltip("우클릭을 놓아 튀어 오르는 순간부터 꼭짓점까지. 비우면 기본 레이어의 공중 자세가 보인다.\n\n" +
+                 "착지 칸은 없다 — 비행이 끝나면 PlayerMovement가 스윙 착지(swingLand) 경로를 그대로 탄다.")]
+        public AnimationClip slingLaunch;
+
         [Header("갈고리 발사 (좌클릭 순간, 팔만) — 비우면 발사 레이어를 만들지 않는다")]
         [Tooltip("총을 들어 쏘는 순간 한 번 재생. 걷기·점프·스윙 위에 팔만 얹히므로, " +
                  "몸 전체가 아니라 오른팔·상체 정도만 움직이는 클립이어야 한다.")]

@@ -4,8 +4,12 @@ using UnityEngine.InputSystem;
 namespace Momentum.Player
 {
     /// <summary>
-    /// 웹 슬링샷 — 지상에서 벽에 줄을 붙이고, 반대로 달려 줄을 늘렸다가 놓으면
-    /// 늘린 만큼의 속력으로 옥상 너머까지 튕겨 오른다.
+    /// 웹 슬링샷 — 지상에서 우클릭으로 벽에 줄을 붙이고 권총을 양손으로 겨눈 채,
+    /// 마우스 휠을 몸 쪽으로 굴려 줄을 감았다가 놓으면 감은 만큼의 속력으로 옥상 너머까지 튕겨 오른다.
+    ///
+    /// <b>흐름</b>: 우클릭 누름(부착·조준) → 휠(충전, 허리가 뒤로 젖혀짐) → 우클릭 놓음(발사)
+    /// → 꼭짓점 → 착지. 착지 동작은 따로 만들지 않았다 — 비행이 끝날 때 공중 조작 스위치를
+    /// 돌려주면 PlayerMovement가 이를 "스윙을 놓은 것"으로 보고 스윙 착지(swingLand)를 그대로 튼다.
     ///
     /// <b>왜 필요한가.</b> 새 도시(건물 34m 이상, 사거리 22m)에서는 지상에 떨어지면
     /// 옥상이 사거리·최대 앙각 밖이라 스윙이 아예 안 걸린다. 견인(<see cref="GrappleZip"/>)은
@@ -14,11 +18,11 @@ namespace Momentum.Player
     ///
     /// <b>물리 — README 표의 "번다" 칸이다.</b>
     /// <list type="bullet">
-    /// <item><b>저장</b>: 훅의 법칙 F = −kx, 탄성 에너지 E = ½kx². 앵커 반대쪽으로 달려
-    ///       줄을 x만큼 늘리는 것이 곧 플레이어가 에너지를 버는 행동이다</item>
-    /// <item><b>방출</b>: ½kx² = ½mv² → v = x·√(k/m). 발사 속력은 늘린 길이에 <b>정비례</b>한다
-    ///       (두 배 늘리면 두 배 빠르고 에너지는 4배). 그래서 k를 노출하지 않고
-    ///       "끝까지 늘렸을 때의 속력" 하나만 튜닝값으로 둔다 — 같은 뜻이고 읽기 쉽다</item>
+    /// <item><b>저장</b>: 석궁의 시위를 감는 것과 같다. 휠 한 칸이 줄을 x만큼 더 당기고,
+    ///       탄성 에너지는 E = ½kx²로 쌓인다. 휠을 굴리는 것이 곧 플레이어가 에너지를 버는 행동이다</item>
+    /// <item><b>방출</b>: ½kx² = ½mv² → v = x·√(k/m). 발사 속력은 감은 양에 <b>정비례</b>한다
+    ///       (두 배 감으면 두 배 빠르고 에너지는 4배). 그래서 k를 노출하지 않고
+    ///       "끝까지 감았을 때의 속력" 하나만 튜닝값으로 둔다 — 같은 뜻이고 읽기 쉽다</item>
     /// <item><b>방향</b>: 포물선 꼭짓점을 옥상 모서리 너머에 두도록 역산한다.
     ///       v_y = √(2gΔh), t = v_y/g, v_x = d/t</item>
     /// </list>
@@ -33,8 +37,9 @@ namespace Momentum.Player
     /// 도구라 늘어나야 한다. 목적이 달라서 물성이 다르다.
     ///
     /// <b>실행 순서를 PlayerMovement 뒤로 고정한다(<c>DefaultExecutionOrder</c>).</b>
-    /// 지상 이동은 매 물리 스텝 수평 속도를 입력값으로 <b>대입</b>한다. 줄의 저항을 그
-    /// 앞에서 걸면 바로 다음에 덮어써져 아무 효과가 없으므로, 반드시 그 뒤에서 깎아야 한다.
+    /// 지상 이동은 매 물리 스텝 수평 속도와 회전을 입력값으로 <b>대입</b>한다. 조준 중
+    /// 제자리에 세우고 건물을 보게 하는 것을 그 앞에서 하면 바로 다음에 덮어써지므로,
+    /// 반드시 그 뒤에서 덮어야 한다.
     /// </summary>
     [DefaultExecutionOrder(100)]
     [RequireComponent(typeof(Rigidbody))]
@@ -50,13 +55,20 @@ namespace Momentum.Player
                  "넣어두면 언젠가 하나만 바뀌어 '우클릭이 지상에서만 안 먹는다' 같은 사고가 난다.")]
         [SerializeField] private InputActionReference slingshotAction = null;
 
-        [Header("줄 늘리기 — 에너지를 버는 구간")]
-        [Tooltip("최대로 늘릴 수 있는 길이(m). 붙인 순간의 거리에서 이만큼 더 멀어지면 줄이 " +
-                 "더는 안 늘어나고 그 방향으로는 못 달린다. 짧으면 충전이 너무 빨라 '번다'는 " +
-                 "느낌이 없고, 길면 건물에서 너무 멀어져 필요한 발사 속력이 커진다.")]
-        [Min(0.5f)][SerializeField] private float maxStretch = 8f;
+        [Header("휠 충전 (InputSystem_Actions ▸ Player ▸ Reel — 마우스 휠)")]
+        [Tooltip("충전에 쓸 휠 액션. 비워두면 같은 오브젝트의 SwingConstraint가 쓰는 Reel 액션을 " +
+                 "빌려 쓴다. 슬링샷은 지상, 스윙은 공중에서만 켜지므로 같은 휠을 써도 겹치지 않는다.")]
+        [SerializeField] private InputActionReference chargeAction = null;
 
-        [Tooltip("끝까지 늘렸을 때의 발사 속력(m/s). v = x·√(k/m)이라 속력은 늘린 길이에 " +
+        [Tooltip("휠 한 칸에 오르는 충전량(0~1). 0.1이면 10칸에 최대. 작을수록 '당긴다'는 손맛이 " +
+                 "살고, 클수록 빠르다 — 속도감이 우선이면 0.2(5칸) 정도.")]
+        [Range(0.01f, 1f)][SerializeField] private float chargePerNotch = 0.1f;
+
+        [Tooltip("보이는 충전량(허리 젖힘)이 실제 충전량을 따라가는 속도(초당). 휠은 칸 단위라 " +
+                 "그대로 애니메이터에 넣으면 몸이 툭툭 끊겨 젖혀진다. 0이면 즉시 대입한다.")]
+        [Min(0f)][SerializeField] private float chargeVisualSpeed = 4f;
+
+        [Tooltip("끝까지 감았을 때의 발사 속력(m/s). v = x·√(k/m)이라 속력은 감은 양에 " +
                  "정비례하므로, 스프링 상수 k 대신 이 값 하나로 튜닝한다.\n\n" +
                  "기준: 중력 14.7 m/s²에서 36m 옥상까지 약 19m 떨어져 쏘면 약 34 m/s가 " +
                  "필요하다. 38이면 약 47m 높이까지 닿고, 그보다 높은 타워는 한 번에 못 간다 " +
@@ -64,7 +76,7 @@ namespace Momentum.Player
                  "전제다 — 넘으면 고속 물리 설정(설계 결정 2)을 다시 봐야 한다.")]
         [Min(1f)][SerializeField] private float maxLaunchSpeed = 38f;
 
-        [Tooltip("이 비율보다 덜 늘리고 놓으면 발사하지 않고 그냥 풀린다. 우클릭을 툭 " +
+        [Tooltip("이 비율보다 덜 감고 놓으면 발사하지 않고 그냥 풀린다. 우클릭을 툭 " +
                  "누른 것만으로 몸이 튀어 오르는 사고를 막는다.")]
         [Range(0f, 1f)][SerializeField] private float minCharge = 0.2f;
 
@@ -74,15 +86,16 @@ namespace Momentum.Player
                  "옆이 훨씬 높은 타워'일 때만 슬링샷이 되고, 비슷한 높이 옥상끼리는 견인 그대로다.")]
         [Min(0f)][SerializeField] private float minRoofRise = 10f;
 
-        [Tooltip("충전 중 이 시간(초)보다 오래 공중에 있으면 줄을 푼다. 인도 턱을 넘을 때 " +
-                 "잠깐 끊기는 접지 신호로 충전이 날아가지 않게 하는 유예다. 점프는 이보다 길어서 걸린다.")]
+        [Tooltip("충전 중 이 시간(초)보다 오래 공중에 있으면 줄을 푼다. 접지 신호가 잠깐 " +
+                 "끊기는 것으로 충전이 날아가지 않게 하는 유예다. 점프는 이보다 길어서 걸린다.")]
         [Min(0f)][SerializeField] private float airborneGrace = 0.3f;
 
-        [Tooltip("줄이 늘어날수록 앵커 반대 방향 달리기 속도를 얼마나 깎을지(0~1).\n\n" +
-                 "1이면 끝까지 늘렸을 때 바깥쪽 속도가 0이 된다(= 그때부터는 강체 구속). " +
-                 "0이면 저항 없이 달리다가 최대 길이에서 갑자기 막힌다. 실제 고무줄은 늘어날수록 " +
-                 "세게 당기므로(F = −kx) 비례해서 깎는 것이 '당겨지는 느낌'에 맞다.")]
-        [Range(0f, 1f)][SerializeField] private float pullResistance = 0.6f;
+        [Tooltip("조준하는 동안 몸을 앵커(건물) 쪽으로 돌리는 속도(초당 각도). 등을 보이고 " +
+                 "우클릭해도 금방 건물을 마주 보게 된다.\n\n" +
+                 "<b>PlayerMovement의 Turn Speed(기본 540)보다 커야 한다.</b> 조준 중에 방향키를 " +
+                 "누르면 PlayerMovement가 매 스텝 그쪽으로 돌리고 이 스크립트가 바로 뒤에서 되돌리는데, " +
+                 "이 값이 더 작으면 다 못 되돌려 몸이 입력 쪽으로 서서히 돌아간다.")]
+        [Min(0f)][SerializeField] private float aimTurnDegPerSec = 720f;
 
         [Header("발사 — 꼭짓점을 옥상 너머에 둔다")]
         [Tooltip("옥상 모서리에서 건물 안쪽으로 얼마나 들어간 지점에 꼭짓점을 둘지(m). " +
@@ -92,17 +105,22 @@ namespace Momentum.Player
         [Tooltip("꼭짓점을 옥상 면보다 얼마나 위에 둘지(m). 캡슐 높이와 난간을 넘을 여유다.")]
         [Min(0f)][SerializeField] private float apexClearance = 2f;
 
-        [Tooltip("날아가는 동안 몸을 발사 방향으로 돌리는 속도(초당 각도). 충전 중에는 건물 " +
-                 "반대쪽을 보고 달렸으므로, 안 돌리면 뒤로 날아가는 그림이 된다.")]
+        [Tooltip("날아가는 동안 몸을 발사 방향으로 돌리는 속도(초당 각도). 조준 중에 이미 " +
+                 "건물을 보고 있으므로 대개 거의 돌 일이 없고, 비스듬히 쏜 만큼만 보정한다.")]
         [Min(0f)][SerializeField] private float flightTurnDegPerSec = 720f;
 
-        /// <summary>줄을 붙이고 늘리는 중인가.</summary>
+        [Header("애니메이션 (PlayerAnimatorBuilder가 만든 Slingshot 레이어)")]
+        [Tooltip("Slingshot 레이어 가중치가 오르내리는 속도(초당). 8이면 0↔1에 0.125초. " +
+                 "0이면 즉시 바뀐다 — 자세가 한 프레임에 갈아 끼워져 튄다(AnimatorLayerFade 참고).")]
+        [Min(0f)][SerializeField] private float animLayerLerpSpeed = AnimatorLayerFade.DefaultSpeed;
+
+        /// <summary>줄을 붙이고 조준·충전하는 중인가.</summary>
         public bool IsCharging { get; private set; }
 
         /// <summary>발사 후 꼭짓점까지 날아가는 중인가. 이 동안은 공중 조작을 막는다.</summary>
         public bool IsLaunching { get; private set; }
 
-        /// <summary>현재 충전량(0~1). 늘린 길이 / 최대 길이. UI나 카메라 연출이 읽을 수 있게 공개한다.</summary>
+        /// <summary>현재 충전량(0~1). 휠로 감은 양. UI나 카메라 연출이 읽을 수 있게 공개한다.</summary>
         public float Charge01 { get; private set; }
 
         private Rigidbody _rb;
@@ -112,14 +130,26 @@ namespace Momentum.Player
         /// <summary>실제로 구독한 액션. 내 칸이 비면 GrappleZip의 것을 빌려 오므로 따로 들고 있는다.</summary>
         private InputAction _action;
 
+        /// <summary>실제로 읽는 휠 액션. 내 칸이 비면 SwingConstraint의 Reel을 빌려 온다.</summary>
+        private InputAction _chargeAction;
+
+        private Animator _animator;
+        private int _slingLayerIndex = -1;
+
+        /// <summary>화면에 보이는 충전량. Charge01을 일정 속도로 따라가 허리 젖힘을 부드럽게 만든다.</summary>
+        private float _shownCharge;
+
+        // 문자열 비교를 매 프레임 하지 않도록 해시를 한 번만 만든다(Animator.StringToHash).
+        // 이름은 PlayerAnimatorBuilder.BuildSlingshotLayer가 만드는 파라미터와 같아야 한다.
+        private static readonly int SlingBeginHash = Animator.StringToHash("SlingBegin");
+        private static readonly int SlingLaunchHash = Animator.StringToHash("SlingLaunch");
+        private static readonly int SlingChargeHash = Animator.StringToHash("SlingCharge");
+
         /// <summary>앵커. 건물이 움직일 일은 없지만 견인과 같은 방식(트랜스폼 + 로컬 좌표)으로 들고 있는다.</summary>
         private Transform _anchorTransform;
         private Vector3 _anchorLocalPoint;
         private Collider _anchorCollider;
         private Vector3 _anchorNormal;
-
-        /// <summary>붙인 순간의 거리. 늘어난 길이 = 지금 거리 − 이 값.</summary>
-        private float _restLength;
 
         /// <summary>놓았을 때 다음 물리 스텝에서 발사하도록 예약한다(입력은 Update 타이밍이라서).</summary>
         private bool _launchQueued;
@@ -145,11 +175,23 @@ namespace Momentum.Player
 
             if (gun == null)
                 Debug.LogWarning("[WebSlingshot] GrappleGun이 없어 앵커를 찾을 수 없다.", this);
+
+            // GrappleZip과 같은 방식으로 레이어를 이름으로 찾는다. 없으면(-1) 애니메이션 없이 동작만 한다.
+            _animator = GetComponentInChildren<Animator>();
+            if (_animator != null) _slingLayerIndex = _animator.GetLayerIndex("Slingshot");
         }
 
         private void OnEnable()
         {
-            // 내 칸이 비었으면 견인이 쓰는 액션을 빌린다 — 같은 우클릭을 지상/공중으로 나눠 쓰므로.
+            // 휠: 내 칸이 비었으면 스윙의 Reel을 빌린다. WebGrabThrow와 같은 규칙으로 Enable만
+            // 하고 Disable은 하지 않는다 — 같이 쓰는 액션이라 여기서 끄면 스윙 감기까지 죽는다.
+            InputActionReference chargeRef = chargeAction;
+            if (chargeRef == null && TryGetComponent(out SwingConstraint swing)) chargeRef = swing.ReelAction;
+            _chargeAction = chargeRef != null ? chargeRef.action : null;
+            if (_chargeAction != null) _chargeAction.Enable();
+            else Debug.LogWarning("[WebSlingshot] 휠 액션이 없어 충전할 수 없다. Reel 액션을 넣어라.", this);
+
+            // 우클릭: 내 칸이 비었으면 견인이 쓰는 액션을 빌린다 — 같은 우클릭을 지상/공중으로 나눠 쓰므로.
             InputActionReference reference =
                 slingshotAction != null ? slingshotAction : (_zip != null ? _zip.ZipAction : null);
             _action = reference != null ? reference.action : null;
@@ -187,7 +229,7 @@ namespace Momentum.Player
         {
             if (!IsCharging) return;
 
-            // 덜 늘렸으면 그냥 푼다. 발사는 다음 물리 스텝으로 미룬다 — 속도를 Update
+            // 덜 감았으면 그냥 푼다. 발사는 다음 물리 스텝으로 미룬다 — 속도를 Update
             // 타이밍에 대입하면 그 사이 PlayerMovement의 FixedUpdate가 수평 속도를 다시 덮어쓸 수 있다.
             if (Charge01 < minCharge) EndCharge();
             else _launchQueued = true;
@@ -208,10 +250,13 @@ namespace Momentum.Player
             _anchorLocalPoint = _anchorTransform.InverseTransformPoint(hit.point);
             _anchorCollider = hit.collider;
             _anchorNormal = hit.normal;
-            _restLength = Vector3.Distance(_rb.position, hit.point);
             _airborneTime = 0f;
             Charge01 = 0f;
+            _shownCharge = 0f;
             IsCharging = true;
+
+            // 조준 자세로. Bool이 아니라 Trigger인 이유는 PlayerAnimatorBuilder.BuildSlingshotLayer 주석 참고.
+            if (_animator != null) _animator.SetTrigger(SlingBeginHash);
 
             // 견인과 같은 이유로 여기서 바로 넘긴다 — FixedUpdate까지 기다리면 그 사이 한 프레임 줄이 안 보인다.
             SetRope(AnchorPoint);
@@ -243,6 +288,40 @@ namespace Momentum.Player
             return roofRise >= minRoofRise;
         }
 
+        /// <summary>
+        /// 휠로 충전량을 채우고, Slingshot 레이어 가중치와 허리 젖힘(SlingCharge)을 갱신한다.
+        ///
+        /// <b>휠은 FixedUpdate가 아니라 여기서 읽는다.</b> 휠 한 칸은 한 프레임에만 값이 들어온다.
+        /// 물리 스텝은 프레임마다 0번 돌 수도 있어서, 거기서 읽으면 그 칸을 놓친다.
+        /// </summary>
+        private void Update()
+        {
+            if (IsCharging && _chargeAction != null)
+            {
+                float input = _chargeAction.ReadValue<float>();
+                if (Mathf.Abs(input) > 0.01f)
+                {
+                    // 값의 크기가 아니라 부호만 쓴다. 휠 델타는 플랫폼마다 단위가 달라(윈도우는
+                    // 한 칸에 120) 크기를 믿으면 기계마다 충전 속도가 달라진다(SwingConstraint와 같은 규칙).
+                    // 몸 쪽으로 굴리면(음수) 당긴다 — 시위를 뒤로 당기는 손동작과 방향이 같다.
+                    Charge01 = Mathf.Clamp01(Charge01 - Mathf.Sign(input) * chargePerNotch);
+                }
+            }
+
+            if (_animator == null || _slingLayerIndex < 0) return;
+
+            // 조준·비행 중에만 레이어를 켠다. 꼭짓점에서 IsLaunching이 꺼지면 서서히 내려가며
+            // 기본 레이어의 낙하 자세로 넘어간다 — 끝난 뒤에도 매 프레임 돌아야 하는 이유다.
+            AnimatorLayerFade.To(_animator, _slingLayerIndex,
+                IsCharging || IsLaunching ? 1f : 0f, animLayerLerpSpeed);
+
+            // 보이는 충전량은 실제 값을 일정 속도로 따라간다 → 칸 단위 입력이 연속 동작이 된다.
+            _shownCharge = chargeVisualSpeed <= 0f
+                ? Charge01
+                : Mathf.MoveTowards(_shownCharge, Charge01, chargeVisualSpeed * Time.deltaTime);
+            _animator.SetFloat(SlingChargeHash, _shownCharge);
+        }
+
         private void FixedUpdate()
         {
             if (IsCharging) TickCharge();
@@ -250,7 +329,8 @@ namespace Momentum.Player
         }
 
         /// <summary>
-        /// 충전 중 매 물리 스텝. 늘어난 길이로 충전량을 갱신하고, 바깥쪽 달리기 속도를 깎는다.
+        /// 충전 중 매 물리 스텝. 줄을 그리고, 제자리에 세워 건물을 보게 한다.
+        /// 충전량 자체는 휠 입력이라 <see cref="Update"/>에서 채운다.
         /// </summary>
         private void TickCharge()
         {
@@ -267,9 +347,6 @@ namespace Momentum.Player
             }
 
             Vector3 anchor = AnchorPoint;
-            float stretch = Mathf.Clamp(Vector3.Distance(_rb.position, anchor) - _restLength, 0f, maxStretch);
-            Charge01 = stretch / maxStretch;
-
             SetRope(anchor);
 
             if (_launchQueued)
@@ -278,32 +355,32 @@ namespace Momentum.Player
                 return;
             }
 
-            ApplyPullResistance(anchor);
+            HoldAim(anchor);
         }
 
         /// <summary>
-        /// 줄의 저항. 앵커 반대쪽(바깥쪽) 수평 속도만 충전량에 비례해 깎는다.
+        /// 조준 자세 유지 — 그 자리에 세우고, 몸을 앵커(건물) 쪽으로 돌린다.
         ///
-        /// <b>힘(AddForce)이 아니라 속도를 직접 깎는 이유.</b> 지상 이동은 매 스텝 수평 속도를
-        /// 입력값으로 대입하므로, 힘으로 당겨봐야 다음 스텝에 지워진다. 대입된 값을 대입 직후에
-        /// 줄이는 것이 이 구조에서 F = −kx를 흉내 내는 유일한 방법이다.
-        ///
-        /// 끝까지 늘어나면 바깥쪽 성분을 <b>전부</b> 지운다 — 스윙의 강체 구속과 같은 투영
-        /// (속도에서 반지름 방향 성분 제거)이다. 옆이나 안쪽으로는 자유롭게 움직일 수 있다.
+        /// <b>SuspendHorizontalControl을 쓰지 않는 이유.</b> 그 스위치는 놓는 순간을
+        /// PlayerMovement가 "스윙을 놓았다"로 읽어 스윙 착지 플래그를 켠다. 땅에 선 채 충전을
+        /// 취소해도 그 플래그가 한 스텝 켜지므로 엉뚱한 착지 판정이 섞일 수 있다. 대신 이
+        /// 스크립트가 실행 순서상 뒤(100)라는 점을 이용해, PlayerMovement가 대입한 수평 속도와
+        /// 회전을 <b>바로 뒤에서 덮는다</b>. MoveRotation은 마지막 호출이 이긴다.
         /// </summary>
-        private void ApplyPullResistance(Vector3 anchor)
+        private void HoldAim(Vector3 anchor)
         {
-            Vector3 away = _rb.position - anchor;
-            away.y = 0f;
-            if (away.sqrMagnitude < 0.0001f) return;
-            away.Normalize();
-
+            // 수평 속도만 지운다. y는 그대로 둬야 중력·접지 처리가 정상으로 돈다.
             Vector3 velocity = _rb.linearVelocity;
-            float outward = Vector3.Dot(new Vector3(velocity.x, 0f, velocity.z), away);
-            if (outward <= 0f) return;   // 앵커 쪽으로 가는 건 막지 않는다
+            _rb.linearVelocity = new Vector3(0f, velocity.y, 0f);
 
-            float cut = Charge01 >= 1f ? 1f : Charge01 * pullResistance;
-            _rb.linearVelocity = velocity - away * (outward * cut);
+            Vector3 toAnchor = anchor - _rb.position;
+            toAnchor.y = 0f;
+            if (toAnchor.sqrMagnitude < 0.0001f) return;
+
+            Quaternion face = Quaternion.LookRotation(toAnchor.normalized, Vector3.up);
+            _rb.MoveRotation(aimTurnDegPerSec <= 0f
+                ? face
+                : Quaternion.RotateTowards(_rb.rotation, face, aimTurnDegPerSec * Time.fixedDeltaTime));
         }
 
         /// <summary>
@@ -328,14 +405,17 @@ namespace Momentum.Player
             _launchDirection = new Vector3(velocity.x, 0f, velocity.z);
             _launchTime = Time.time;
 
-            // 꼭짓점까지 공중 조작을 막는다. 충전하느라 '건물 반대쪽' 키를 누르고 있었으므로,
-            // 그대로 두면 공중 가속(airAcceleration)이 발사 속도를 거꾸로 깎아 궤적이 무너진다.
+            // 꼭짓점까지 공중 조작을 막는다. 조준하는 동안 아무 방향키나 누르고 있었을 수 있어,
+            // 그대로 두면 공중 가속(airAcceleration)이 발사 속도를 엉뚱한 쪽으로 깎아 궤적이 무너진다.
             if (_movement != null) _movement.SuspendHorizontalControl = true;
 
             if (_movement != null && _movement.LogLift)
                 Debug.Log($"[띄움] 슬링샷 발사 — 충전 {Charge01:P0}, 속도 {velocity.magnitude:F1} m/s " +
                           $"(필요 {neededSpeed:F1}), y속도 {velocity.y:F2} 대입, " +
                           $"높이 {transform.position.y:F2}m", this);
+
+            // 발사 자세로. 레이어 가중치는 IsLaunching이 켜져 있는 동안 Update가 1로 유지한다.
+            if (_animator != null) _animator.SetTrigger(SlingLaunchHash);
 
             EndCharge();
             IsLaunching = true;

@@ -129,6 +129,9 @@ namespace Momentum.Player.EditorTools
             if (set.zipLoop != null)
                 BuildZipLayer(controller, set);
 
+            if (set.slingAim != null)
+                BuildSlingshotLayer(controller, set);
+
             if (set.grappleFire != null)
                 BuildGrappleFireLayer(controller, set);
 
@@ -623,6 +626,69 @@ namespace Momentum.Player.EditorTools
 
             var layers = controller.layers;
             layers[layers.Length - 1] = zipLayer;
+            controller.layers = layers;
+        }
+
+        /// <summary>
+        /// 웹 슬링샷 전용 레이어. Charge(1D 블렌드 트리) → Launch.
+        ///
+        /// Charge는 조준 자세(0)와 위로 젖힌 자세(1)를 <c>SlingCharge</c>로 섞는다 — 휠로 채운
+        /// 충전량이 곧 허리가 젖혀진 정도다. 뼈를 코드로 돌리는 대신 블렌드 트리를 쓰는 이유는,
+        /// 애니메이터가 포즈 전체를 섞으므로 손·총·머리가 서로 어긋나지 않기 때문이다.
+        ///
+        /// Zip 레이어처럼 <b>보일지 말지는 레이어 가중치가 정한다</b>(WebSlingshot이 넣음).
+        /// 그래서 착지·이동으로 돌아가는 전이는 이 레이어에 없다 — 가중치가 0이 되면 끝이다.
+        /// </summary>
+        private static void BuildSlingshotLayer(AnimatorController controller, PlayerAnimationSet set)
+        {
+            controller.AddParameter("SlingBegin", AnimatorControllerParameterType.Trigger);
+            controller.AddParameter("SlingLaunch", AnimatorControllerParameterType.Trigger);
+            controller.AddParameter("SlingCharge", AnimatorControllerParameterType.Float);
+
+            controller.AddLayer("Slingshot");
+            var layer = controller.layers[controller.layers.Length - 1];
+            layer.defaultWeight = 0f;
+            layer.blendingMode = AnimatorLayerBlendingMode.Override;
+            var sm = layer.stateMachine;
+
+            // 로코모션과 같은 방식으로 블렌드 트리를 컨트롤러 에셋 안에 저장한다.
+            // AddObjectToAsset을 빠뜨리면 메모리에만 있다가 에디터를 다시 열면 사라진다.
+            var aimTree = new BlendTree
+            {
+                name = "SlingCharge",
+                blendType = BlendTreeType.Simple1D,
+                blendParameter = "SlingCharge",
+                useAutomaticThresholds = false,
+            };
+            AssetDatabase.AddObjectToAsset(aimTree, controller);
+            aimTree.AddChild(set.slingAim, 0f);
+            aimTree.AddChild(set.slingAimMax != null ? set.slingAimMax : set.slingAim, 1f);
+
+            var charge = sm.AddState("Charge");
+            charge.motion = aimTree;
+            sm.defaultState = charge;
+
+            // 새로 조준하면 어디서든 Charge로. Bool이 아니라 Trigger인 이유: Any State 전이는
+            // 조건이 참인 동안 매 프레임 다시 걸린다 — Bool이면 상태가 첫 프레임에 갇힌다.
+            // Trigger는 한 번 쓰이면 저절로 꺼진다.
+            var begin = sm.AddAnyStateTransition(charge);
+            begin.AddCondition(AnimatorConditionMode.If, 0f, "SlingBegin");
+            begin.hasExitTime = false;
+            begin.duration = 0.1f;
+            begin.canTransitionToSelf = true;   // 직전 조준을 취소하고 바로 다시 눌러도 처음부터
+
+            if (set.slingLaunch != null)
+            {
+                var launch = sm.AddState("Launch");
+                launch.motion = set.slingLaunch;
+                var fire = sm.AddAnyStateTransition(launch);
+                fire.AddCondition(AnimatorConditionMode.If, 0f, "SlingLaunch");
+                fire.hasExitTime = false;
+                fire.duration = 0.05f;   // 속도감 우선: 놓는 순간 거의 즉시
+            }
+
+            var layers = controller.layers;
+            layers[layers.Length - 1] = layer;
             controller.layers = layers;
         }
 
