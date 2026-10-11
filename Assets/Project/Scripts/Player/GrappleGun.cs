@@ -200,6 +200,17 @@ namespace Momentum.Player
                  "방금 박은 자리에 그대로 다시 붙는다.")]
         [Min(0.02f)][SerializeField] private float retryInterval = 0.12f;
 
+        // 추가 생성
+        [Header("자동 앵커 — 공중 스윙 (스파이더맨식)")]
+        [Tooltip("공중에서 R을 누르면 조준 대신 이 탐색기로 앵커를 고른다. 비우면 같은 " +
+                 "오브젝트에서 찾고, 없으면 실행 중에 붙인다(그때는 기본값으로 동작하므로 " +
+                 "값을 조정하려면 에디터에서 플레이어에 직접 붙여둘 것).")]
+        [SerializeField] private SwingAnchorFinder autoAnchor = null;
+        [Tooltip("공중에서 자동 앵커가 실패했을 때 예전 크로스헤어 조준으로 넘어갈지.\n\n" +
+                 "끄는 것이 기본이다. 켜면 옥상에서 뛰어내린 직후처럼 위에 벽이 없을 때 " +
+                 "크로스헤어가 길 건너 옥상을 맞혀, 진자가 그 벽으로 흔들려 박는 예전 동작이 돌아온다.")]
+        [SerializeField] private bool aimFallbackInAir = false;
+
         /// <summary>갈고리가 붙어 있는가. 구속이 붙을 때 이 값이 그대로 스위치가 된다.</summary>
         public bool IsAttached { get; private set; }
 
@@ -310,6 +321,11 @@ namespace Momentum.Player
             _rb = GetComponent<Rigidbody>();
             _movement = GetComponent<PlayerMovement>();
             if (aimCamera == null) aimCamera = Camera.main;
+
+            // 추가 생성 — 자동 앵커 탐색기를 찾고, 없으면 붙인다. 씬을 고치지 않아도
+            // 바로 동작하게 하려는 것이다. 붙이는 순간 그쪽 Awake가 Rigidbody·바닥 마스크를 채운다.
+            if (autoAnchor == null) autoAnchor = GetComponent<SwingAnchorFinder>();
+            if (autoAnchor == null) autoAnchor = gameObject.AddComponent<SwingAnchorFinder>();
             if (animator == null) animator = GetComponentInChildren<Animator>();
             if (visualRoot == null && muzzle != null) visualRoot = muzzle.parent != null ? muzzle.parent.gameObject : null;
 
@@ -764,7 +780,8 @@ namespace Momentum.Player
 
         private void TryAttach()
         {
-            if (!TryFindAnchor(out RaycastHit hit)) return;
+            // 수정: 공중이면 자동 앵커(스파이더맨식)를 먼저 쓴다. 땅에서는 예전 조준 그대로.
+            if (!TryFindSwingAnchor(out RaycastHit hit)) return;
 
             _anchorTransform = hit.collider.transform;
             _anchorLocalPoint = _anchorTransform.InverseTransformPoint(hit.point);
@@ -773,6 +790,34 @@ namespace Momentum.Player
             IsAttached = true;
 
             SetRopeVisible(true);
+        }
+
+        // 추가 생성
+        /// <summary>
+        /// R(스윙) 버튼이 쓰는 앵커 탐색. 공중이냐 땅이냐로 방식을 가른다.
+        ///
+        /// <b>공중</b>: <see cref="SwingAnchorFinder"/>가 진행 방향 앞·위의 옆 벽을 자동으로
+        /// 고른다. 조준할 필요가 없고, 앵커가 옆 벽에 생겨 진자면이 도로와 나란하다.
+        /// 기본값으로는 실패해도 크로스헤어로 넘어가지 않는다 — 넘어가면 옥상에서 뛰어내린
+        /// 직후(위에 벽이 없을 때) 크로스헤어가 길 건너 옥상을 맞혀 벽에 박는 예전 동작이
+        /// 그대로 돌아온다. 대신 <see cref="retryWhileHeld"/> 재시도 루프가 0.12초마다
+        /// 다시 찾으므로, 조금 떨어져 위쪽에 벽이 생기는 순간 붙는다.
+        /// 원하는 지점을 겨눠 가는 것은 우클릭 웹 집(<see cref="GrappleZip"/>)이 맡는다.
+        ///
+        /// <b>땅</b>: 예전 크로스헤어 조준 그대로(<see cref="TryFindAnchor(out RaycastHit)"/>).
+        /// </summary>
+        private bool TryFindSwingAnchor(out RaycastHit hit)
+        {
+            bool airborne = _movement != null && !_movement.IsGrounded;
+
+            if (airborne && autoAnchor != null && aimCamera != null)
+            {
+                if (autoAnchor.TryFind(aimCamera.transform.forward, anchorMask, maxRange, out hit))
+                    return true;
+                if (!aimFallbackInAir) return false;
+            }
+
+            return TryFindAnchor(out hit);
         }
 
         /// <summary>

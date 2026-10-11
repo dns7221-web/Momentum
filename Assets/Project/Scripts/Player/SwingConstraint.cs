@@ -175,6 +175,14 @@ namespace Momentum.Player
                  "펌프보다 약하게 두는 편이 좋다 — 세면 그네가 아니라 방향 전환 게임이 된다.")]
         [Min(0f)][SerializeField] private float steerAcceleration = 9f;
 
+        // 추가 생성
+        [Header("진입 속도 — 붙는 순간 스윙이 바로 살아나게")]
+        [Tooltip("공중에서 붙는 순간 진행 방향(접선)으로 보장하는 최소 속도(m/s). 0이면 끈다(순수 물리).\n\n" +
+                 "순수 진자는 출발 높이보다 높이 못 올라가고, 일찍 놓을 때마다 조금씩 낮아져 결국 " +
+                 "길바닥으로 내려온다. 스파이더맨식 스윙은 붙는 순간 속도를 보장해 그 손실을 메운다. " +
+                 "이미 이보다 빠르면 건드리지 않는다.")]
+        [Min(0f)][SerializeField] private float minEntrySpeed = 14f;
+
         /// <summary>현재 로프 길이. 구속이 실제로 쓰는 값이다.</summary>
         public float RopeLength { get; private set; }
 
@@ -589,10 +597,54 @@ namespace Momentum.Player
 
             SetHitFeedbackSuppressed(true);
 
+            // 추가 생성 — 붙는 순간 접선 속도를 최소값까지 채운다(아래 함수 주석 참고).
+            ApplyEntrySpeed();
+
             // 붙는 순간을 명시적으로 알린다. Swing 레이어의 상태 기계는 가중치 0일 때도
             // 계속 돌고 있어서, 매번 SwingLoop부터 다시 시작한다는 보장이 없다 — 트리거로
             // "지금 막 붙었다"를 알려야 StartSwing 클립(있다면)이 확실히 재생된다.
             _animator?.SetTrigger(SwingStartedHash);
+        }
+
+        // 추가 생성
+        /// <summary>
+        /// 붙는 순간 <b>접선 방향</b> 속도가 <see cref="minEntrySpeed"/>보다 느리면 그만큼 채운다.
+        ///
+        /// <b>왜 접선인가.</b> 줄 방향(앵커 쪽) 성분은 거리 구속이 다음 스텝에 지워버리므로
+        /// 거기에 속도를 넣어봐야 사라진다. 줄에 수직인 접선 성분만이 진자를 실제로 돌린다 —
+        /// <see cref="ApplyPumpInput"/>이 로프 방향 성분을 버리는 것과 같은 이유다.
+        ///
+        /// <b>방향은 지금 움직이는 쪽을 그대로 쓴다.</b> 떨어지는 중이면 아래·앞을 섞은 방향인데,
+        /// 그게 곧 진자가 어차피 가려던 방향이라 궤도를 비틀지 않고 빠르기만 올린다.
+        /// 거의 멈춰 있을 때만 몸이 향한 방향(<see cref="_facing"/>)을 접선면에 눕혀 쓴다.
+        ///
+        /// 땅에서 붙인 경우는 건드리지 않는다 — 그건 스윙이 아니라 견인·슬링샷의 영역이다.
+        /// </summary>
+        private void ApplyEntrySpeed()
+        {
+            if (minEntrySpeed <= 0f || gun == null) return;
+            if (_movement != null && _movement.IsGrounded) return;
+
+            Vector3 toAnchor = gun.AnchorPoint - _rb.position;
+            if (toAnchor.sqrMagnitude < 0.0001f) return;
+            Vector3 radial = toAnchor.normalized;
+
+            // Vector3.ProjectOnPlane(v, n): v에서 n 방향 성분을 뺀 것 = 줄에 수직인 성분.
+            Vector3 velocity = _rb.linearVelocity;
+            Vector3 tangent = Vector3.ProjectOnPlane(velocity, radial);
+            Vector3 direction = tangent.sqrMagnitude > 1f
+                ? tangent
+                : Vector3.ProjectOnPlane(_facing, radial);
+            if (direction.sqrMagnitude < 0.0001f) return;   // 줄과 나란한 방향뿐이면 줄 게 없다
+            direction.Normalize();
+
+            float along = Vector3.Dot(velocity, direction);
+            if (along >= minEntrySpeed) return;
+
+            // AddForce가 아니라 속도를 바로 쓴다. AddForce는 다음 물리 스텝에야 반영돼서
+            // 같은 줄에서 상한(maxSpeed)으로 자를 수가 없기 때문이다.
+            _rb.linearVelocity = Vector3.ClampMagnitude(
+                velocity + direction * (minEntrySpeed - along), maxSpeed);
         }
 
         /// <summary>
