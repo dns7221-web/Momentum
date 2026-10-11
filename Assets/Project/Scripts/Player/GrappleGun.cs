@@ -221,6 +221,12 @@ namespace Momentum.Player
         /// </summary>
         public Transform Muzzle => muzzle;
 
+        // 추가 생성 — 공중 웹 집(GrappleZip)이 같은 카메라·레이어를 쓰게 열어둔다.
+        /// <summary>조준 카메라. 웹 집이 "카메라가 보는 쪽"을 방향으로 쓴다.</summary>
+        public Camera AimCamera => aimCamera;
+        /// <summary>줄이 붙을 수 있는 레이어. 웹 집이 줄 그릴 건물을 같은 기준으로 찾는다.</summary>
+        public LayerMask AnchorMask => anchorMask;
+
         /// <summary>
         /// 앵커의 현재 월드 좌표.
         ///

@@ -68,7 +68,7 @@ namespace Momentum.Player
         // 추가 생성 — 공중 웹 집
         [Header("공중 웹 집 (Web Zip) — 공중에서 우클릭")]
         [Tooltip("켜면 공중 우클릭이 '앵커까지 끌려가기' 대신 스파이더맨식 웹 집이 된다.\n" +
-                 "줄을 쏴서 붙는 순간 그 반동으로 앞으로 튀어나가고, 줄은 바로 끊는다.\n" +
+                 "줄을 쏴서 붙으면 정해진 거리를 직선으로 빠르게 끌려가고, 끝에서 살짝 떠오르며 놓는다.\n" +
                  "지상 우클릭(벽 견인·슬링샷)은 그대로다.")]
         [SerializeField] private bool airWebZip = true;
 
@@ -80,19 +80,28 @@ namespace Momentum.Player
                  "크게 두면 그냥 떨어지면서 당긴다.")]
         [Min(0f)][SerializeField] private float fireMaxFallSpeed = 2f;
 
-        [Tooltip("당기는 순간 앞으로 나가는 최소 속도(m/s). 이미 그 방향으로 이보다 빠르면 " +
-                 "그 속도를 유지한다 — 더하지 않고 하한만 둔다(연타 폭주 방지).")]
-        [Min(1f)][SerializeField] private float zipLaunchSpeed = 24f;
+        // 수정 — 인섬니악 스파이더맨식: 조준한 건물이 없어도 카메라가 보는 쪽으로
+        // '정해진 거리를 직선으로 빠르게' 끌려간다. 한 번 튕기고 떨어지는 방식이 아니다.
+        [Tooltip("웹 집 한 번에 직선으로 끌려가는 거리(m). 가는 길에 벽이 있으면 그 앞에서 멈춘다.")]
+        [Min(1f)][SerializeField] private float airZipDistance = 14f;
 
-        [Tooltip("튀어나가는 방향의 위쪽 성분 상한(sin 값). 0.45 ≈ 27°. " +
-                 "앵커가 머리 위에 있어도 '로켓처럼 수직 상승'하지 않고 앞으로 나가게 한다.")]
-        [Range(0f, 1f)][SerializeField] private float maxLaunchUpDot = 0.45f;
+        [Tooltip("끌려가는 최소 속도(m/s). 이미 그 방향으로 이보다 빠르면 그 속도를 유지한다 — " +
+                 "더하지 않고 하한만 둔다(연타해도 속도가 쌓이지 않는다).")]
+        [Min(1f)][SerializeField] private float airZipSpeed = 30f;
 
-        [Tooltip("튀어나갈 때 위로 얹는 고정 속도(m/s). 포물선이 바로 꺾이지 않고 살짝 떠오르게 한다.")]
-        [Min(0f)][SerializeField] private float launchUpBonus = 3f;
+        [Tooltip("카메라가 위를 볼 때 웹 집이 올라가는 각도 상한(도). 0이면 항상 수평으로만 간다.")]
+        [Range(0f, 45f)][SerializeField] private float maxZipPitchUp = 15f;
 
-        [Tooltip("당긴 뒤 줄이 팽팽하게 보이다 끊어지기까지의 시간(초).")]
-        [Min(0f)][SerializeField] private float ropeSnapTime = 0.12f;
+        [Tooltip("카메라가 아래를 볼 때 웹 집이 내려가는 각도 상한(도). 크면 땅으로 꽂힌다.")]
+        [Range(0f, 45f)][SerializeField] private float maxZipPitchDown = 10f;
+
+        [Tooltip("끌려가기가 끝나는 순간 위로 얹는 속도(m/s). 끝에서 살짝 떠오르며 놓아 " +
+                 "바로 다음 스윙·웹 집으로 이어 붙일 시간을 번다.")]
+        [Min(0f)][SerializeField] private float zipEndUpSpeed = 4f;
+
+        [Tooltip("줄이 붙을 건물을 찾는 거리(m). 이 안에 건물이 없으면 줄은 허공의 점에 그린다 — " +
+                 "웹 집 자체는 건물 없이도 나간다.")]
+        [Min(1f)][SerializeField] private float webVisualRange = 25f;
 
         [Tooltip("한 번 뜬 동안 쓸 수 있는 웹 집 횟수. 땅에 닿거나 스윙에 붙으면 다시 채워진다. " +
                  "0이면 무제한 — 스윙 없이 웹 집만으로 날아다닐 수 있게 된다.")]
@@ -141,8 +150,18 @@ namespace Momentum.Player
         private bool _airMode;
         /// <summary>줄이 붙어 이미 튀어나갔는가. 그 뒤로는 줄만 잠깐 보여주고 끝낸다.</summary>
         private bool _launched;
-        /// <summary>튀어나간 시각(_elapsed 기준). 줄을 끊을 타이밍을 잰다.</summary>
-        private float _launchTime;
+        /// <summary>웹 집 방향(단위 벡터). 시작할 때 카메라 방향에서 한 번 정하고 끝까지 바꾸지 않는다.</summary>
+        private Vector3 _zipDir;
+        /// <summary>이번 웹 집이 갈 거리(m). 앞에 벽이 있으면 airZipDistance보다 짧아진다.</summary>
+        private float _zipTravel;
+        /// <summary>지금까지 간 거리(m).</summary>
+        private float _zipTraveled;
+        /// <summary>끌려가는 속도(m/s). 줄이 붙는 순간 한 번 정한다.</summary>
+        private float _zipSpeed;
+        /// <summary>줄 끝이 그려질 월드 좌표. 건물에 붙거나, 없으면 허공의 한 점이다.</summary>
+        private Vector3 _airAnchor;
+        /// <summary>끝나는 곳에 벽이 있으면 그 법선, 허공이면 zero. 끝날 때 벽을 따라 미끄러질지 정한다.</summary>
+        private Vector3 _zipWallNormal;
         /// <summary>이번 공중 구간에서 쓴 웹 집 횟수.</summary>
         private int _airZipsUsed;
 
@@ -200,6 +219,15 @@ namespace Momentum.Player
             // 옥상이 훨씬 높을 때). 둘 다 같은 액션을 구독하므로 누가 먼저 불릴지 모르는데,
             // ClaimsPress()는 어느 순서로 불려도 같은 답을 준다(WebSlingshot 주석 참고).
             if (_slingshot != null && _slingshot.ClaimsPress()) return;
+
+            // 수정 — 공중이면 조준한 앵커가 없어도 웹 집이 나간다(스파이더맨식).
+            // 예전에는 아래 TryFindAnchor가 먼저 돌아서, 크로스헤어에 건물이 안 걸리면
+            // 우클릭이 아무 반응도 없었다.
+            if (airWebZip && _movement != null && !_movement.IsGrounded)
+            {
+                TryStartAirZip();
+                return;
+            }
             // 소품은 견인 목표에서 뺀다 — 옥상 위에서 우클릭했을 때 바로 옆 드럼통으로
             // 순간 이동해버리는 사고를 막는다. 견인은 건물끼리 옮겨다니는 동작이다.
             //
@@ -214,18 +242,9 @@ namespace Momentum.Player
             // 오르는 것은 막을 이유가 없다.
             // 추가 생성 — 공중이면 웹 집. 높이 제한(minClimbHeight)은 보지 않는다:
             // 웹 집은 "앵커로 올라가기"가 아니라 "앞으로 나가기"라 앵커 높이가 상관없다.
-            bool airborne = airWebZip && _movement != null && !_movement.IsGrounded;
-            if (airborne)
-            {
-                if (maxAirZips > 0 && _airZipsUsed >= maxAirZips) return;
-                _airZipsUsed++;
-            }
-            else
-            {
-                bool flatSurface = hit.normal.y >= gun.RoofNormalMinY;
-                if (flatSurface && hit.point.y < transform.position.y + minClimbHeight) return;
-            }
-            _airMode = airborne;
+            bool flatSurface = hit.normal.y >= gun.RoofNormalMinY;
+            if (flatSurface && hit.point.y < transform.position.y + minClimbHeight) return;
+            _airMode = false;
             _launched = false;
 
             _targetTransform = hit.collider.transform;
@@ -244,9 +263,7 @@ namespace Momentum.Player
             // 안 그려진다. 건물벽처럼 가까운 목표는 견인 자체가 아주 짧게 끝나버려서,
             // 그 공백 때문에 로프가 뜰 새도 없이 견인이 끝나 "거미줄이 아예 안 보인다"로
             // 보였다.
-            // 웹 집은 줄이 총구에서 출발해 날아가는 것부터 보여준다.
-            if (gun != null)
-                gun.OverrideRopeTarget = _airMode ? MuzzlePosition : TargetPoint;
+            if (gun != null) gun.OverrideRopeTarget = TargetPoint;
         }
 
         /// <summary>줄이 나가는 위치. 총구가 비어 있으면 몸 중심을 쓴다.</summary>
@@ -320,21 +337,96 @@ namespace Momentum.Player
             gun.OverrideRopeTarget = TargetPoint;
         }
 
-        // 추가 생성
+        // 수정 — 인섬니악 스파이더맨식 웹 집
         /// <summary>
-        /// 공중 웹 집 한 스텝. 세 단계로 진행된다.
+        /// 공중 웹 집을 시작한다. 크로스헤어에 건물이 걸리면 그 앵커 쪽으로(지금 기능 유지),
+        /// 안 걸리면 카메라가 보는 쪽으로 간다 — 조준을 놓쳐도 우클릭이 헛돌지 않는다.
+        ///
+        /// <b>방향</b>: 앵커 쪽 또는 카메라가 보는 쪽. 위아래 각만 <see cref="maxZipPitchUp"/>/<see cref="maxZipPitchDown"/>로
+        /// 자른다 — 하늘을 보면 로켓처럼 솟고 땅을 보면 처박히므로 "앞으로" 나가는 범위로 접는다.
+        /// <b>거리</b>: <see cref="airZipDistance"/>. 가는 길에 벽이 있으면 <c>Rigidbody.SweepTest</c>로
+        /// 미리 재서 그 앞에서 멈춘다(캡슐 모양 그대로 쓸어보는 유니티 내장 기능).
+        /// <b>줄</b>: 앞쪽 위로 레이를 쏴서 건물이 맞으면 거기에, 없으면 허공의 한 점에 그린다.
+        /// 줄은 보여주기용이고 이동은 줄과 상관없이 정해진 직선을 간다.
+        /// </summary>
+        private void TryStartAirZip()
+        {
+            if (maxAirZips > 0 && _airZipsUsed >= maxAirZips) return;
+
+            // 지금 기능 유지 — 크로스헤어에 건물이 걸리면 예전처럼 그 앵커 쪽으로 간다.
+            // 걸린 게 없을 때만 카메라가 보는 쪽으로 간다(인섬니악 방식에서 가져온 부분).
+            bool aimed = gun.TryFindAnchor(out RaycastHit aimHit, includeProps: false, requireClearHang: false);
+            Camera cam = gun.AimCamera;
+            Vector3 look = aimed ? (aimHit.point - _rb.position).normalized
+                         : cam != null ? cam.transform.forward : transform.forward;
+
+            // 수평 방향 + 제한된 위아래 각으로 단위 벡터를 다시 만든다.
+            Vector3 flat = new Vector3(look.x, 0f, look.z);
+            if (flat.sqrMagnitude < 0.0001f) flat = transform.forward;   // 바로 위/아래를 볼 때 대비
+            flat.y = 0f;
+            flat.Normalize();
+            float pitch = Mathf.Clamp(Mathf.Asin(Mathf.Clamp(look.y, -1f, 1f)) * Mathf.Rad2Deg,
+                                      -maxZipPitchDown, maxZipPitchUp) * Mathf.Deg2Rad;
+            Vector3 dir = flat * Mathf.Cos(pitch) + Vector3.up * Mathf.Sin(pitch);
+
+            // 가는 길에 벽이 있으면 그 앞(0.5m)에서 멈춘다. 너무 가까우면 쓰지 않는다(횟수도 안 깎음).
+            float travel = aimed ? Mathf.Min(airZipDistance, Vector3.Distance(_rb.position, aimHit.point))
+                                 : airZipDistance;
+            _zipWallNormal = Vector3.zero;
+            if (_rb.SweepTest(dir, out RaycastHit block, travel, QueryTriggerInteraction.Ignore))
+            {
+                travel = Mathf.Max(0f, block.distance - 0.5f);
+                _zipWallNormal = block.normal;
+            }
+            if (travel < 1.5f) return;
+
+            _airZipsUsed++;
+            _zipDir = dir;
+            _zipTravel = travel;
+            _zipTraveled = 0f;
+            _airAnchor = aimed ? aimHit.point : FindWebVisualPoint(dir);
+
+            _airMode = true;
+            _launched = false;
+            _elapsed = 0f;
+            IsZipping = true;
+
+            // 직선으로 끌려가는 동안은 중력을 끈다. 켜두면 끝에 갈수록 처져서 "끌려간다"가
+            // 아니라 "던져졌다"로 보인다. Stop에서 반드시 다시 켠다.
+            _rb.useGravity = false;
+            if (_movement != null) _movement.SuspendHorizontalControl = true;
+            gun.OverrideRopeTarget = MuzzlePosition;   // 줄이 총구에서 출발해 뻗어 나가는 것부터 보여준다
+        }
+
+        /// <summary>
+        /// 줄을 그릴 점을 찾는다. 웹 집 방향에서 조금 위(약 20°)로 레이를 쏴 건물에 맞으면 그 점,
+        /// 없으면 같은 방향 <see cref="webVisualRange"/>의 70% 지점이다.
+        /// </summary>
+        private Vector3 FindWebVisualPoint(Vector3 dir)
+        {
+            Vector3 from = MuzzlePosition;
+            Vector3 ray = (dir + Vector3.up * 0.35f).normalized;
+            if (Physics.Raycast(from, ray, out RaycastHit hit, webVisualRange, gun.AnchorMask,
+                                QueryTriggerInteraction.Ignore))
+                return hit.point;
+            return from + ray * (webVisualRange * 0.7f);
+        }
+
+        /// <summary>
+        /// 공중 웹 집 한 스텝. 두 단계로 진행된다.
         /// <list type="number">
-        /// <item><b>발사</b> — 줄 끝이 총구에서 앵커까지 <see cref="webTravelTime"/> 동안 뻗어 나간다.
+        /// <item><b>발사</b> — 줄 끝이 총구에서 붙을 점까지 <see cref="webTravelTime"/> 동안 뻗어 나간다.
         ///       이 동안 낙하 속도를 묶어 공중에 잠깐 걸리는 느낌을 준다.</item>
-        /// <item><b>당김</b> — 줄이 닿는 스텝에 <see cref="Launch"/>로 속도를 <b>한 번</b> 새로 쓴다.</item>
-        /// <item><b>끊기</b> — 줄을 <see cref="ropeSnapTime"/> 동안 보여준 뒤 놓는다. 그 뒤는 관성과 중력뿐이다.</item>
+        /// <item><b>끌려가기</b> — 정한 방향으로 <b>매 스텝 같은 속도를 대입</b>해 직선으로 간다.
+        ///       정해진 거리를 다 가거나 벽에 막히면 <see cref="EndAirZip"/>.</item>
         /// </list>
-        /// 견인과 달리 매 스텝 속도를 대입하지 않는다 — 한 번 차고 나가는 것이 웹 집이다.
-        /// 스윙(<see cref="SwingConstraint"/>)이 붙으면 즉시 양보하는 것은 견인과 같다.
+        /// 예전 방식(속도를 한 번 주고 줄을 끊음)은 바로 중력에 처져서 "대시"가 아니라
+        /// "튕김"으로 보였다. 매 스텝 대입하면 끝날 때까지 직선이 유지된다.
+        /// 스윙이 붙으면 즉시 양보하는 것은 견인과 같다.
         /// </summary>
         private void AirZipStep()
         {
-            if (gun.IsAttached || _targetTransform == null)
+            if (gun.IsAttached)
             {
                 Stop(arrived: false);
                 return;
@@ -342,9 +434,9 @@ namespace Momentum.Player
 
             if (!_launched)
             {
-                // 1) 발사 — 줄 끝을 총구 → 앵커로 보간해 날아가는 것처럼 그린다.
+                // 1) 발사 — 줄 끝을 총구 → 붙을 점으로 보간해 날아가는 것처럼 그린다.
                 float t = webTravelTime <= 0f ? 1f : Mathf.Clamp01(_elapsed / webTravelTime);
-                gun.OverrideRopeTarget = Vector3.Lerp(MuzzlePosition, TargetPoint, t);
+                gun.OverrideRopeTarget = Vector3.Lerp(MuzzlePosition, _airAnchor, t);
 
                 // 떨어지는 속도만 묶는다. 올라가는 중이면 건드리지 않는다.
                 Vector3 v = _rb.linearVelocity;
@@ -354,47 +446,65 @@ namespace Momentum.Player
                     _rb.linearVelocity = v;
                 }
 
-                if (t >= 1f) Launch();
+                if (t < 1f) return;
+
+                // 줄이 붙는 순간 속도를 정한다. 이미 그 방향으로 더 빠르면 그 속도를 지킨다.
+                _launched = true;
+                float carried = Mathf.Max(0f, Vector3.Dot(_rb.linearVelocity, _zipDir));
+                _zipSpeed = Mathf.Max(carried, airZipSpeed);
+
+                if (_movement != null && _movement.LogLift)
+                    Debug.Log($"[띄움] 웹 집 — 속도 {_zipSpeed:F1}m/s, 거리 {_zipTravel:F1}m, " +
+                              $"남은 횟수 {(maxAirZips > 0 ? maxAirZips - _airZipsUsed : -1)}", this);
+            }
+
+            // 2) 끌려가기 — 줄은 붙은 점에 고정된 채 몸만 직선으로 간다.
+            gun.OverrideRopeTarget = _airAnchor;
+
+            float step = _zipSpeed * Time.fixedDeltaTime;
+            float remaining = _zipTravel - _zipTraveled;
+            // 이번 스텝에 갈 길이 막혔는지도 매번 본다 — 출발할 때 없던 것(움직이는 소품 등) 대비.
+            if (remaining <= 0f)
+            {
+                EndAirZip(_zipWallNormal);
+                return;
+            }
+            if (_rb.SweepTest(_zipDir, out RaycastHit stepHit, Mathf.Min(step, remaining) + 0.1f,
+                              QueryTriggerInteraction.Ignore))
+            {
+                EndAirZip(stepHit.normal);
                 return;
             }
 
-            // 3) 끊기 — 줄은 앵커에 붙은 채 잠깐 보였다가 사라진다.
-            gun.OverrideRopeTarget = TargetPoint;
-            if (_elapsed - _launchTime >= ropeSnapTime) Stop(arrived: false);
+            _rb.linearVelocity = _zipDir * _zipSpeed;
+            _zipTraveled += step;
+            if (_movement != null) _movement.SuspendHorizontalControl = true;
         }
 
-        // 추가 생성
         /// <summary>
-        /// 2) 당김 — 앵커 쪽으로 튀어나가는 속도를 한 번 대입한다.
+        /// 웹 집을 끝낸다. 끌려가던 속도는 그대로 두고 위로 <see cref="zipEndUpSpeed"/>만 얹는다 —
+        /// 속도를 지켜야 웹 집 → 스윙 → 웹 집으로 이어 붙일 때 속도감이 끊기지 않는다.
         ///
-        /// <b>방향</b>: 앵커를 향하되 위아래 각을 제한한다. 머리 위 앵커면 수직 로켓이 되고,
-        /// 발밑 앵커면 땅에 처박히므로 "앞으로" 나가는 범위로 접는다.
-        /// <b>크기</b>: 그 방향으로 이미 가지고 있던 속도와 <see cref="zipLaunchSpeed"/> 중 큰 값.
-        /// 더하지 않으므로 연타해도 속도가 쌓이지 않는다(견인의 Stop과 같은 원칙).
+        /// <paramref name="wallNormal"/>이 있으면(벽 앞에서 끝남) 벽 안쪽 성분을 지워 <b>벽을 따라
+        /// 미끄러지게</b> 한다(<c>Vector3.ProjectOnPlane</c>). 정면으로 박아서 남는 속도가 적으면
+        /// 지상 견인 도착과 같은 규칙으로 벽을 차고 나온다(<see cref="exitSpeed"/>).
         /// </summary>
-        private void Launch()
+        private void EndAirZip(Vector3 wallNormal)
         {
-            _launched = true;
-            _launchTime = _elapsed;
-
-            Vector3 toTarget = TargetPoint - _rb.position;
-            Vector3 flat = new Vector3(toTarget.x, 0f, toTarget.z);
-            if (flat.sqrMagnitude < 0.0001f) flat = transform.forward;   // 바로 위/아래 앵커 대비
-            flat.y = 0f;
-            flat.Normalize();
-
-            // 위아래 성분(sin)을 [-0.1, maxLaunchUpDot]로 자르고 수평 성분으로 길이를 맞춘다.
-            float up = Mathf.Clamp(toTarget.normalized.y, -0.1f, maxLaunchUpDot);
-            Vector3 dir = flat * Mathf.Sqrt(1f - up * up) + Vector3.up * up;
-
-            float carried = Mathf.Max(0f, Vector3.Dot(_rb.linearVelocity, dir));
-            float speed = Mathf.Max(carried, zipLaunchSpeed);
-
-            _rb.linearVelocity = dir * speed + Vector3.up * launchUpBonus;
-
-            if (_movement != null && _movement.LogLift)
-                Debug.Log($"[띄움] 웹 집 — 속도 {speed:F1}m/s, 상향 {up:F2}, " +
-                          $"남은 횟수 {(maxAirZips > 0 ? maxAirZips - _airZipsUsed : -1)}", this);
+            Vector3 v = _zipDir * _zipSpeed;
+            if (wallNormal != Vector3.zero)
+            {
+                Vector3 away = new Vector3(wallNormal.x, 0f, wallNormal.z);
+                if (away.sqrMagnitude > 0.01f)
+                {
+                    away.Normalize();
+                    v = Vector3.ProjectOnPlane(v, away);
+                    if (new Vector3(v.x, 0f, v.z).magnitude < exitSpeed) v += away * exitSpeed;
+                }
+                v.y = Mathf.Max(v.y, 0f);   // 벽에서 끝날 때 아래로 꽂히지 않게
+            }
+            _rb.linearVelocity = v + Vector3.up * zipEndUpSpeed;
+            Stop(arrived: false);
         }
 
         /// <summary>
@@ -407,6 +517,7 @@ namespace Momentum.Player
         private void Stop(bool arrived)
         {
             IsZipping = false;
+            if (_airMode) _rb.useGravity = true;   // 수정 — 웹 집 동안 꺼둔 중력을 되살린다
             _airMode = false;       // 추가 생성
             _launched = false;      // 추가 생성
             _targetTransform = null;
