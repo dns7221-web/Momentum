@@ -156,6 +156,9 @@ MonoBehaviour:
   backdropSegment: 20
   backdropHeight: {x: 60, y: 120}
   boundaryHeight: 300
+  outerWallVisible: 1
+  outerWallThickness: 5
+  outerWallAnchorable: 0
   frontageDepth: 20
   lotWidthLarge: 20
   lotWidthMedium: 15
@@ -209,7 +212,43 @@ MonoBehaviour:
   surfaceColliders: 1
   roofRailPrefab: {fileID: 919132149155446097, guid: 9bd54e536f92a2b4788aad93fb3369fb, type: 3}
   roofRailInset: 0.3
-  treePrefab: {fileID: 0}
+  treePrefab: {fileID: 919132149155446097, guid: e5e18efe425bd3f49931465a07fe3718, type: 3}
+  treeFitHeight: 1
+  whiteCityBuildings: []
+  whiteCityMaxStretch: 1.8
+  whiteCityFootprintScale: {x: 0.5, y: 2}
+  whiteCityFill: 0.92
+  whiteCityOnDiagonalWalls: 1
+  whiteCitySeed: 1357
+  roofPropPrefabs: []
+  roofPropsPerBuilding: {x: 0, y: 3}
+  roofPropEdgeMargin: 2
+  roofPropColliders: 0
+  streetLightPrefab: {fileID: 919132149155446097, guid: 069deb0cf78a5b94b9a3f340b1bd335a, type: 3}
+  streetLightHeight: 8
+  streetLightSpacing: 24
+  streetLightYawOffset: 0
+  trafficLightPrefab: {fileID: 919132149155446097, guid: f7a0cd94b1af7fa42940b2fa06c77193, type: 3}
+  trafficLightHeight: 6
+  trafficLightYawOffset: 0
+  gantryPrefab: {fileID: 919132149155446097, guid: ba48b7148db9d194f8b931919d9e56ff, type: 3}
+  gantryAvenue: A3
+  gantryZ:
+  - -330
+  - -180
+  - 20
+  gantryHeight: 8
+  gantryYawOffset: 0
+  streetPropsAnchorable: 0
+  elevatedDeckPrefab: {fileID: 919132149155446097, guid: 02474a93813db684386084074a297ae6, type: 3}
+  elevatedPillarPrefab: {fileID: 919132149155446097, guid: 9e9fe5c8ee743f64d8763e6af257722e, type: 3}
+  elevatedDeckYawOffset: 0
+  dockProps: []
+  dockPropGap: 2
+  dockPropSkipChance: 0.25
+  yardProps: []
+  yardPropsPerBlock: 4
+  clutterSeed: 2024
   greyboxMaterials: []
   landmarkMaterial: {fileID: 0}
   backdropMaterial: {fileID: 0}
@@ -219,4 +258,6 @@ MonoBehaviour:
   waterMaterial: {fileID: 0}
   railMaterial: {fileID: 0}
   treeMaterial: {fileID: 0}
+  outerWallMaterial: {fileID: 0}
+  pavingUvSize: 10
   markStatic: 1
