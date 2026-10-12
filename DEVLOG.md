@@ -1968,3 +1968,34 @@ PR #7~#10을 받은 뒤 첫 영상(50초)을 0.1~0.3초 간격으로 보고 문�
 바라보는 자식 오브젝트(`CameraHeadingTarget`)를 Look At Target으로 두고 Recentering Target을
 Look At Target으로 바꿨다. 위치는 그대로라 조준점과 Deoccluder 기준은 변하지 않는다.
 컴파일·플레이 확인 전이다.
+
+### 벽에 박으면 카메라도 같이 박힘 — 당기지 말고 돌린다 (Movie_008) — 2026-10-12
+
+**증상.** 스윙하다 벽에 닿으면 0.1초마다 화면이 "벽만 보임 ↔ 얼굴 초근접"으로 뒤집혔다
+(7.3~7.9초, 18.8~19.3초).
+
+**가설 검토 — 캐릭터가 벽을 통과하나?** 아니었다. 몸(캡슐)은 Continuous Dynamic이고 로프 위치
+보정도 `SweepTest`로 막힌다. 영상 네 구간에서 몸 전체가 건물로 사라진 장면은 없었다. 벽에 박혀
+보인 건 반지름 0.25 m 캡슐 밖으로 벌어진 팔다리였다.
+
+**원인.** 카메라 타깃(발 + 0.6 m)이 벽에서 0.25 m인데, Cinemachine Deoccluder는 카메라를 타깃에서
+최소 `Minimum Distance From Target + Camera Radius`(0.3 + 0.4 = 0.7 m) 밖에 둔다
+(`CinemachineDeoccluder.PullCameraInFrontOfNearestObstacle`, 패키지 소스 확인). 카메라가 그 벽
+너머에 있으면 0.7 m 자리는 언제나 벽 속이다. Decollider는 같은 상황에서 타깃 0.1 m 앞까지 끌어온다.
+**값으로는 좋은 자리를 만들 수 없다.** 처음엔 값(Minimum Distance 1, 그다음 0.1)으로 풀려다
+소스를 읽고 두 번 정정했다.
+
+**해결 — `CameraWallAvoid` (새 스크립트, CinemachineCamera에 붙임).** 캐릭터에서 카메라 쪽 1.2 m
+안에 벽이 있으면 Orbital Follow의 `HorizontalAxis`를 "벽을 따라 바라보는 방향 + 바깥 25°"로
+지수 감쇠(약 0.3초)로 돌린다.
+
+| 결정 | 이유 |
+|---|---|
+| 당기지 않고 궤도 각도를 돌림 | 벽 너머 카메라와 벽에 붙은 캐릭터를 잇는 선 위엔 좋은 자리가 없다 |
+| 절대 각도가 아니라 차이(`SignedAngle`)를 더함 | Binding Mode가 바뀌어도 맞다 |
+| 검사 구 반지름 0.15 < 캡슐 0.25 | 닿은 벽과 처음부터 겹치면 `SphereCast`가 그 벽을 못 본다 |
+| 지금 방향을 벽면에 투영해 같은 쪽 유지 | 최소한만 돈다. 벽 정면 뒤일 때만 진행 방향 뒤쪽을 고른다 |
+| 리센터링은 따로 끄지 않음 | 축 값이 바뀌면 Orbital Follow가 입력으로 보고 리센터링을 미룬다(내장) |
+
+Deoccluder 값은 부드럽게만 조정(사용자가 인스펙터에서): Minimum Occlusion Time 0.1, Smoothing 0.5,
+Damping 1, Damping When Occluded 0.15. 컴파일·플레이 확인 전이다.
