@@ -70,6 +70,17 @@ namespace Momentum.Player
                  "속도에 비례할 이유가 없는 지점에서 잘라준다. 중력 9.81에서 12면 상승 7.3m · 체공 2.4초.")]
         [Min(0f)][SerializeField] private float maxReleaseUpSpeed = 12f;
 
+        // 추가 생성 (2026-10-12, Movie_007) — 놓은 뒤 높이 상한
+        [Tooltip("놓은 뒤 날아오를 수 있는 가장 높은 곳 = 앵커 높이 + 이 값(m). 음수면 끈다.\n\n" +
+                 "앵커는 항상 건물 벽에 붙으므로(SwingAnchorFinder) 정점이 옥상 근처에서 멈춘다. " +
+                 "진입 속도·펌프·릴리즈 보상·스윙 중력이 쌓여도 도시 위로 솟지 않는다. " +
+                 "1.5면 붙었던 건물 옥상에 겨우 올라설 수 있는 정도.")]
+        [SerializeField] private float releaseApexAboveAnchor = 1.5f;
+
+        [Tooltip("높이 상한 때문에 깎인 위 속도 중 몇 %를 진행 방향(수평)으로 돌릴지.\n" +
+                 "0이면 그냥 버린다(놓는 순간 확 느려진 느낌). 1이면 전부 앞으로(너무 빨라질 수 있다).")]
+        [Range(0f, 1f)][SerializeField] private float clippedLiftToForward = 0.5f;
+
         [Header("충돌 시 자동 릴리즈")]
         [Tooltip("건물에 정면으로 박으면 줄을 자동으로 놓는다. 끄면 벽에 붙은 채 구속이 계속 " +
                  "당겨 긁히며 끌려간다.")]
@@ -206,6 +217,10 @@ namespace Momentum.Player
 
         /// <summary>붙은 순간의 월드 Y. <c>HighFlight</c> 판정의 기준선이다.</summary>
         private float _swingStartHeight;
+
+        // 추가 생성 — 마지막으로 붙어 있던 앵커 위치. 놓는 순간엔 GrappleGun이 이미 앵커를
+        // 지운 뒤라(AnchorPoint가 Vector3.zero) 매 스텝 여기에 기억해 둔다.
+        private Vector3 _lastAnchor;
 
         // ─── 애니메이션 ───
         //
@@ -529,6 +544,7 @@ namespace Momentum.Player
             if (_movement != null) _movement.SuspendHorizontalControl = true;
 
             Vector3 anchor = gun.AnchorPoint;
+            _lastAnchor = anchor; // 추가 생성 — EndSwing의 높이 상한이 쓴다
 
             // 실제 길이가 목표를 향해 정해진 속도로 따라간다. MoveTowards는 목표를 넘어가지
             // 않으므로 도착하면 저절로 멈춘다 — 도착 판정을 따로 쓸 필요가 없다.
@@ -587,6 +603,7 @@ namespace Momentum.Player
         {
             _swinging = true;
             _swingStartHeight = _rb.position.y;
+            _lastAnchor = gun.AnchorPoint; // 추가 생성 — 붙자마자 놓아도 상한이 맞게
             RopeLength = Mathf.Max(minRopeLength, Vector3.Distance(_rb.position, gun.AnchorPoint));
 
             // 붙은 길이가 곧 최대 길이다. 그보다 길게 풀 수 있으면 앵커에 붙은 의미가 없어진다.
@@ -703,7 +720,7 @@ namespace Momentum.Player
             RopeLength = 0f;
             if (_movement != null) _movement.SuspendHorizontalControl = false;
 
-            // 아래에 이른 return이 둘 있으므로(보상 없음·수평 속도 0) 그보다 위에서 푼다.
+            // 아래에 이른 return이 있으므로(보상 없음) 그보다 위에서 푼다.
             // 억제를 켜둔 채로 빠져나가면 그 뒤로 타격 피드백이 영영 안 나온다.
             SetHitFeedbackSuppressed(false);
 
@@ -721,28 +738,89 @@ namespace Momentum.Player
             if (_movement == null || !_movement.IsGrounded)
                 _animator?.SetTrigger(SwingReleasedHash);
 
-            if (!boost || releaseUpFraction <= 0f) return;
+            // 수정 (2026-10-12) — 보상과 높이 상한은 플레이어가 놓았을 때만 건다. 벽에 박아
+            // 끊긴 경우(OnCollisionEnter)나 컴포넌트가 꺼진 경우는 놓은 것이 아니다.
+            if (!boost) return;
 
-            // 수평 성분만 잰다. y를 빼는 이 한 줄이 "이미 위로 가던 속도까지 보상하는" 것을
-            // 막는다 — 줄을 타고 수직으로 솟구치던 중에 놓으면 여기가 0이라 보상이 없다.
+            // 수정 — 보상과 높이 상한을 한 번에 계산하려고 속도를 지역 변수에 모아
+            // 마지막에 한 번만 쓴다.
             Vector3 velocity = _rb.linearVelocity;
-            float horizontalSpeed = new Vector2(velocity.x, velocity.z).magnitude;
-            if (horizontalSpeed < 0.01f) return;
 
-            // 비율은 "언제 놓았는가"를 재고, 상한은 "얼마나 높이 갈 수 있는가"를 정한다.
-            // 둘을 함께 두어야 타이밍이 실력으로 남으면서도 폭주하지 않는다.
-            float up = Mathf.Min(horizontalSpeed * releaseUpFraction, maxReleaseUpSpeed);
+            if (releaseUpFraction > 0f)
+            {
+                // 수평 성분만 잰다. y를 빼는 이 한 줄이 "이미 위로 가던 속도까지 보상하는" 것을
+                // 막는다 — 줄을 타고 수직으로 솟구치던 중에 놓으면 여기가 0이라 보상이 없다.
+                float horizontalSpeed = new Vector2(velocity.x, velocity.z).magnitude;
+                if (horizontalSpeed >= 0.01f)
+                {
+                    // 비율은 "언제 놓았는가"를 재고, 상한은 "얼마나 높이 갈 수 있는가"를 정한다.
+                    // 둘을 함께 두어야 타이밍이 실력으로 남으면서도 폭주하지 않는다.
+                    float up = Mathf.Min(horizontalSpeed * releaseUpFraction, maxReleaseUpSpeed);
 
-            // ForceMode.VelocityChange는 질량을 무시하고 속도를 그대로 더한다. 질량을 1로
-            // 두고 튜닝한 값이 나중에 질량을 바꾸는 순간 어긋나는 일을 여기서 미리 막는다.
-            _rb.AddForce(Vector3.up * up, ForceMode.VelocityChange);
+                    // ForceMode.VelocityChange는 질량을 무시하고 속도를 그대로 더한다. 질량을 1로
+                    // 두고 튜닝한 값이 나중에 질량을 바꾸는 순간 어긋나는 일을 여기서 미리 막는다.
+                    //
+                    // 수정 (2026-10-12) — 그 AddForce 대신 속도에 바로 더한다. 질량을 무시하는 점은
+                    // 같다. AddForce는 FixedUpdate 다음 물리 스텝에서야 적용돼서, 아래 높이 상한과
+                    // 마지막 maxSpeed 상한이 이 보상을 못 보고 지나친다.
+                    velocity.y += up;
 
-            if (_movement != null && _movement.LogLift)
-                Debug.Log($"[띄움] 스윙 릴리즈 보상 — y속도 +{up:F2}, " +
-                          $"높이 {transform.position.y:F2}m", this);
+                    if (_movement != null && _movement.LogLift)
+                        Debug.Log($"[띄움] 스윙 릴리즈 보상 — y속도 +{up:F2}, " +
+                                  $"높이 {transform.position.y:F2}m", this);
+                }
+            }
+
+            // 추가 생성 — 정점이 앵커 높이를 넘지 않게 자른다(LimitReleaseApex 주석 참고).
+            velocity = LimitReleaseApex(velocity);
 
             // 감기 증폭과 겹쳐 상한을 넘지 않게 한다 — maxSpeed는 설계값이 아니라 안전장치다.
-            _rb.linearVelocity = Vector3.ClampMagnitude(_rb.linearVelocity, maxSpeed);
+            _rb.linearVelocity = Vector3.ClampMagnitude(velocity, maxSpeed);
+        }
+
+        // 추가 생성 (2026-10-12, Movie_007)
+        /// <summary>
+        /// 놓은 뒤 정점이 <c>앵커 높이 + releaseApexAboveAnchor</c>를 넘지 않게 위 속도를 자른다.
+        ///
+        /// <b>공식.</b> 위로 던진 물체가 더 올라가는 높이는 h = vy² / (2g). 거꾸로 "h까지만
+        /// 올라가라"면 vy 상한 = √(2gh). 놓은 뒤에는 스윙 중력 배수가 안 걸리고 기본 중력만
+        /// 받으므로(올라가는 동안은 PlayerMovement의 낙하 중력도 안 걸린다) g = 9.81 그대로 쓴다.
+        ///
+        /// <b>왜 앵커 높이인가.</b> 앵커는 항상 건물 벽에 붙는다. 그 높이를 천장으로 삼으면
+        /// 건물마다 따로 높이를 재지 않아도 정점이 옥상 근처에서 멈춘다. 인섬니악 스파이더맨도
+        /// 스윙만으로는 웹을 붙인 곳보다 높이 못 가고, 높이는 웹 집·포인트 런치로 얻는다.
+        ///
+        /// <b>깎인 속도를 앞으로.</b> 그냥 버리면 놓는 순간 확 느려진 것처럼 느껴진다.
+        /// 일부를 진행 방향으로 돌려서 "위로 못 가는 대신 앞으로 빨라진다"가 되게 한다.
+        ///
+        /// 유니티 내장 <c>Rigidbody.maxLinearVelocity</c>는 방향 구분 없이 전체 속력만 자르므로
+        /// "위로만" 자르는 이 일에는 쓸 수 없어 직접 계산한다.
+        /// </summary>
+        private Vector3 LimitReleaseApex(Vector3 velocity)
+        {
+            if (releaseApexAboveAnchor < 0f || velocity.y <= 0f) return velocity;
+
+            float g = -Physics.gravity.y;
+            if (g <= 0f) return velocity;
+
+            // 아직 더 올라가도 되는 높이. 이미 앵커보다 위면 0 → 위 속도를 전부 자른다.
+            float room = _lastAnchor.y + releaseApexAboveAnchor - _rb.position.y;
+            float maxUp = room > 0f ? Mathf.Sqrt(2f * g * room) : 0f;
+            if (velocity.y <= maxUp) return velocity;
+
+            float clipped = velocity.y - maxUp;
+            velocity.y = maxUp;
+
+            // 수평 방향이 있으면 깎인 만큼의 일부를 그쪽으로 돌린다.
+            Vector3 flat = new Vector3(velocity.x, 0f, velocity.z);
+            if (flat.sqrMagnitude > 0.0001f)
+                velocity += flat.normalized * (clipped * clippedLiftToForward);
+
+            if (_movement != null && _movement.LogLift)
+                Debug.Log($"[띄움] 릴리즈 높이 상한 — y속도 {clipped:F2} 깎음, " +
+                          $"정점 ≤ 앵커+{releaseApexAboveAnchor:F1}m", this);
+
+            return velocity;
         }
 
         /// <summary>
