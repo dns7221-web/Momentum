@@ -367,9 +367,19 @@ namespace Momentum.Level
         public GameObject treePrefab;
         [Tooltip("나무 프리팹을 treeHeight에 맞춰 키운다. Kenney 나무처럼 작은 모델용.")]
         public bool treeFitHeight = true;
+        // 추가 생성 — 나무 에셋을 여러 종류 섞어 쓰기 (2026-10-12)
+        [Tooltip("나무를 여러 종류 섞을 때 채운다. 한 개라도 있으면 위 Tree Prefab 대신 나무마다 여기서 하나씩 고른다. " +
+                 "각 프리팹은 따로 재서 treeHeight에 맞춘다(treeFitHeight가 켜져 있을 때).")]
+        public List<GameObject> treePrefabs = new List<GameObject>();
+        // 추가 생성
+        [Tooltip("나무 높이를 ± 이 비율만큼 흔든다. 0.1이면 treeHeight의 90~110%. 같은 나무가 줄지어 보이지 않게 한다. " +
+                 "공원 나무는 저공 앵커(기획안 12 m)라 크게 흔들면 스윙 높이가 달라진다.")]
+        [Range(0f, 0.5f)] public float treeHeightJitter = 0.1f;
 
-        [Header("WhiteCity 건물 (회색 박스 대체) — 비우면 회색 박스 그대로")]
-        [Tooltip("WhiteCity/Prefabs/Buildings의 건물들. 필지마다 가장 잘 맞는 것을 골라 높이를 맞춰 세운다.")]
+        // 수정 — 목록 이름은 그대로 두고(바꾸면 저장된 값이 사라진다) 설명만 넓혔다. 어떤 건물 에셋이든 넣을 수 있다.
+        [Header("건물 프리팹 (회색 박스 대체) — WhiteCity·새 도시 에셋 모두 가능, 비우면 회색 박스 그대로")]
+        [Tooltip("WhiteCity/Prefabs/Buildings의 건물들, 또는 새로 넣은 도시 에셋의 건물 프리팹. " +
+                 "필지마다 가장 잘 맞는 것을 골라 높이를 맞춰 세운다.")]
         public List<GameObject> whiteCityBuildings = new List<GameObject>();
         [Tooltip("세로로만 늘이는 한계. 1.8이면 원래 비율보다 1.8배 길쭉하거나 납작한 것까지 허용. 넘으면 회색 박스로 남는다.")]
         [Range(1f, 4f)] public float whiteCityMaxStretch = 1.8f;
@@ -379,6 +389,13 @@ namespace Momentum.Level
         [Range(0.5f, 1f)] public float whiteCityFill = 0.92f;
         [Tooltip("사선 대로 가로벽도 WhiteCity로 세운다.")]
         public bool whiteCityOnDiagonalWalls = true;
+        // 추가 생성 — 랜드마크·원경도 건물 목록으로 (2026-10-12)
+        [Tooltip("랜드마크의 3단(높이 55% · 30% · 15%)을 단마다 위 건물 목록에서 맞는 건물로 세운다. " +
+                 "단 구조는 그대로라 중간 옥상 앵커 선반이 남는다. 맞는 게 없는 단만 회색으로 남는다.")]
+        public bool whiteCityOnLandmarks = true;
+        // 추가 생성
+        [Tooltip("원경(동·북쪽 맵 끝 줄) 회색 박스도 위 건물 목록으로 세운다. 맞는 게 없는 칸만 회색으로 남는다.")]
+        public bool whiteCityOnBackdrop = true;
         public int whiteCitySeed = 1357;
 
         [Header("옥상 소품 (WhiteCity/Prefabs/Roof) — WhiteCity 건물 위에만")]

@@ -980,9 +980,28 @@ namespace Momentum.Level
 
                 Vector2 size = lm.area.Size;
                 float y = 0f;
+                // 추가 생성 — 단마다 건물 목록에서 맞는 건물을 고를 난수. 랜드마크마다 다르게.
+                var tierRng = new PlanRandom(settings.whiteCitySeed ^ (count * 7919 + 17));
                 for (int i = 0; i < 3; i++)
                 {
                     float h = lm.height * share[i];
+
+                    // 추가 생성 — 단 하나하나를 건물 목록의 건물로 세운다. 랜드마크 전체를 건물 한 채로
+                    // 바꾸지 않는 이유: 기획안(City Plan v3)에서 3단 셋백의 중간 옥상이 앵커 선반이다.
+                    // 단을 쌓는 구조를 그대로 두면 선반 높이(55%·85% 지점)도 그대로 남는다.
+                    // TryCreateWhiteCity는 바닥 중앙 피벗 루트를 돌려주므로 단의 바닥 높이(y)에 올리면 된다.
+                    if (settings.whiteCityOnLandmarks)
+                    {
+                        var fitted = TryCreateWhiteCity($"Tier{i}", size.x * scale[i], size.y * scale[i], h, tierRng);
+                        if (fitted != null)
+                        {
+                            fitted.transform.SetParent(go.transform, false);
+                            fitted.transform.localPosition = new Vector3(0f, y, 0f);
+                            y += h;
+                            continue;
+                        }
+                    }
+
                     var tier = GameObject.CreatePrimitive(PrimitiveType.Cube);
                     tier.name = $"Tier{i}";
                     tier.transform.SetParent(go.transform, false);
@@ -1049,6 +1068,9 @@ namespace Momentum.Level
             root.transform.SetParent(parent, false);
 
             var rng = new PlanRandom(settings.treeSeed);
+            // 추가 생성 — 종류·높이 고르기는 별도 난수로 한다. 위치 난수(rng)를 같이 쓰면
+            // 나무 종류를 추가하는 것만으로 모든 나무 위치가 바뀌어 버린다.
+            var kindRng = new PlanRandom(settings.treeSeed ^ 0x5bd1e995);
             PrepareTreeFit(root.transform);
             var p = settings.park;
             float inset = settings.treeInset;
@@ -1062,22 +1084,32 @@ namespace Momentum.Level
                     if (rng.Next() < settings.treeSkipChance) continue;
                     float jx = (float)(rng.Next() * 5.0 - 2.5);
                     float jz = (float)(rng.Next() * 5.0 - 2.5);
-                    CreateTree(root.transform, new Vector2(x + jx, z + jz), anchorLayer, count);
+                    CreateTree(root.transform, new Vector2(x + jx, z + jz), anchorLayer, count, kindRng);
                     count++;
                 }
             }
             return count;
         }
 
-        private void CreateTree(Transform parent, Vector2 at, int anchorLayer, int index)
+        /// <summary>
+        /// 나무 한 그루. 프리팹이 있으면 그중 하나를 골라 높이를 맞춰 세우고, 없으면 회색 기둥 + 구.
+        /// 수정 — kindRng로 종류와 높이 흔들기(treeHeightJitter)를 고른다.
+        /// </summary>
+        private void CreateTree(Transform parent, Vector2 at, int anchorLayer, int index, PlanRandom kindRng)
         {
             GameObject tree;
-            if (settings.treePrefab != null)
+            float lift = 0f;
+            if (treeSpecs.Count > 0)
             {
-                tree = InstantiateLinked(settings.treePrefab);
+                var spec = treeSpecs[Mathf.Min(treeSpecs.Count - 1, (int)(kindRng.Next() * treeSpecs.Count))];
+                // 1 ± jitter. 배율과 띄움을 같은 비율로 키워야 바닥이 땅에 그대로 붙는다.
+                float jitter = 1f + (float)(kindRng.Next() * 2.0 - 1.0) * settings.treeHeightJitter;
+
+                tree = InstantiateLinked(spec.prefab);
                 tree.transform.SetParent(parent, false);
                 tree.transform.localRotation = Quaternion.Euler(0f, (index * 137.5f) % 360f, 0f);
-                tree.transform.localScale *= treeScale;
+                tree.transform.localScale *= spec.scale * jitter;
+                lift = spec.lift * jitter;
                 AddMeshColliders(tree, true);
             }
             else
@@ -1108,7 +1140,7 @@ namespace Momentum.Level
             }
 
             tree.name = $"Tree_{index:000}";
-            tree.transform.localPosition = new Vector3(at.x, settings.treePrefab != null ? treeLift : 0f, at.y);
+            tree.transform.localPosition = new Vector3(at.x, lift, at.y); // 수정 — 고른 종류의 띄움 값
             if (anchorLayer >= 0) SetLayerRecursive(tree, anchorLayer);
         }
 
@@ -1132,7 +1164,10 @@ namespace Momentum.Level
             {
                 float h = Mathf.Lerp(range.x, range.y, (float)rng.Next());
                 float z1 = Mathf.Min(z + seg, east.z1) - LotGap;
-                CreateSlab(root.transform, $"East_{count:00}", new PlanRect(east.x0, east.x1, z, z1), h, h, material, anchorLayer, true);
+                var area = new PlanRect(east.x0, east.x1, z, z1);
+                // 수정 — 건물 목록으로 먼저 세워 보고, 안 맞는 칸만 회색 판으로 둔다.
+                if (!TryBackdropBuilding(root.transform, $"East_{count:00}", area, h, count, anchorLayer))
+                    CreateSlab(root.transform, $"East_{count:00}", area, h, h, material, anchorLayer, true);
                 count++;
             }
 
@@ -1141,10 +1176,35 @@ namespace Momentum.Level
             {
                 float h = Mathf.Lerp(range.x, range.y, (float)rng.Next());
                 float x1 = Mathf.Min(x + seg, north.x1) - LotGap;
-                CreateSlab(root.transform, $"North_{count:00}", new PlanRect(x, x1, north.z0, north.z1), h, h, material, anchorLayer, true);
+                var area = new PlanRect(x, x1, north.z0, north.z1);
+                // 수정 — 위와 같다.
+                if (!TryBackdropBuilding(root.transform, $"North_{count:00}", area, h, count, anchorLayer))
+                    CreateSlab(root.transform, $"North_{count:00}", area, h, h, material, anchorLayer, true);
                 count++;
             }
             return count;
+        }
+
+        // 추가 생성 — 원경 한 칸을 건물 목록의 건물로 세운다 (2026-10-12)
+        /// <summary>
+        /// 원경 한 칸(area, 높이 height)에 건물 목록에서 맞는 건물을 세운다. 세웠으면 true.
+        /// whiteCityOnBackdrop이 꺼져 있거나 맞는 건물이 없으면 false — 호출하는 쪽이 회색 판을 세운다.
+        ///
+        /// 높이 난수(rng)는 건드리지 않는다. 여기서 같은 난수를 쓰면 회색 판의 높이까지 바뀌어
+        /// 건물 목록을 비워도 예전 원경으로 돌아가지 않는다. 그래서 칸 번호로 따로 시드를 만든다.
+        /// </summary>
+        private bool TryBackdropBuilding(Transform parent, string name, PlanRect area, float height, int index, int anchorLayer)
+        {
+            if (!settings.whiteCityOnBackdrop) return false;
+
+            var pick = new PlanRandom(settings.backdropSeed ^ (index * 104729 + 31));
+            var go = TryCreateWhiteCity(name, area.Size.x, area.Size.y, height, pick);
+            if (go == null) return false;
+
+            go.transform.SetParent(parent, false);
+            go.transform.localPosition = new Vector3(area.Center.x, 0f, area.Center.y);
+            if (anchorLayer >= 0) SetLayerRecursive(go, anchorLayer);
+            return true;
         }
 
         /// <summary>

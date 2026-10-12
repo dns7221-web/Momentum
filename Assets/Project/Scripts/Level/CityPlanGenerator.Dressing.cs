@@ -38,8 +38,16 @@ namespace Momentum.Level
         private readonly List<CityBuilding> whiteCityBuilt = new List<CityBuilding>();
         private int whiteCityFallback;
         private int whiteCityLotCount;
-        private float treeScale = 1f;
-        private float treeLift;
+        // 수정 — 나무 한 종류의 배율(treeScale)·띄움(treeLift) 대신, 종류마다 따로 잰 값을 들고 있는다.
+        // 프리팹마다 원래 크기와 피벗 높이가 달라서 한 값으로는 여러 종류를 같은 높이에 맞출 수 없다.
+        private struct TreeSpec
+        {
+            public GameObject prefab;
+            public float scale; // treeHeight에 맞추는 배율
+            public float lift;  // 바운즈 바닥을 땅에 닿게 올리는 높이(배율 적용 후)
+        }
+
+        private readonly List<TreeSpec> treeSpecs = new List<TreeSpec>();
 
         // ─── 공용 배치 ───
 
@@ -384,15 +392,31 @@ namespace Momentum.Level
 
         // ─── 공원 나무 크기 ───
 
-        /// <summary>나무 프리팹을 treeHeight에 맞출 배율을 한 번만 잰다. Kenney 나무처럼 작은 모델용.</summary>
+        /// <summary>
+        /// 나무 프리팹마다 treeHeight에 맞출 배율을 한 번씩 잰다. Kenney 나무처럼 작은 모델용.
+        /// 수정 — treePrefabs 목록이 있으면 그 전부를, 없으면 예전처럼 treePrefab 하나를 잰다.
+        /// 목록이 비고 treePrefab도 없으면 treeSpecs가 비어 CreateTree가 회색 기둥 + 구로 대신한다.
+        /// </summary>
         private void PrepareTreeFit(Transform probeParent)
         {
-            treeScale = 1f;
-            treeLift = 0f;
-            if (settings.treePrefab == null || !settings.treeFitHeight) return;
-            if (!TryMeasurePrefab(settings.treePrefab, probeParent, out Bounds b) || b.size.y < 0.01f) return;
-            treeScale = settings.treeHeight / b.size.y;
-            treeLift = -b.min.y * treeScale;
+            treeSpecs.Clear();
+
+            var sources = new List<GameObject>();
+            foreach (var prefab in settings.treePrefabs)
+                if (prefab != null) sources.Add(prefab);
+            if (sources.Count == 0 && settings.treePrefab != null) sources.Add(settings.treePrefab);
+
+            foreach (var prefab in sources)
+            {
+                var spec = new TreeSpec { prefab = prefab, scale = 1f, lift = 0f };
+                if (settings.treeFitHeight &&
+                    TryMeasurePrefab(prefab, probeParent, out Bounds b) && b.size.y >= 0.01f)
+                {
+                    spec.scale = settings.treeHeight / b.size.y;
+                    spec.lift = -b.min.y * spec.scale;
+                }
+                treeSpecs.Add(spec);
+            }
         }
 
         // ─── 지상 잡동사니 ───

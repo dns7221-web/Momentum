@@ -214,13 +214,53 @@ MonoBehaviour:
   roofRailInset: 0.3
   treePrefab: {fileID: 919132149155446097, guid: e5e18efe425bd3f49931465a07fe3718, type: 3}
   treeFitHeight: 1
-  whiteCityBuildings: []
+  treePrefabs:
+  - {fileID: 919132149155446097, guid: e5e18efe425bd3f49931465a07fe3718, type: 3}
+  - {fileID: 919132149155446097, guid: 95edd1880b9482b4b80f2b34b224e4a4, type: 3}
+  - {fileID: 919132149155446097, guid: ff4177cc03704bb4284f816d26b206a3, type: 3}
+  - {fileID: 919132149155446097, guid: 231e500bb01279d4c93aca2da787dd2e, type: 3}
+  - {fileID: 919132149155446097, guid: 018dc4e70c5737d4eb272e7368ee65b4, type: 3}
+  - {fileID: 919132149155446097, guid: 19fe9a439238f39458ef376140d2cddb, type: 3}
+  treeHeightJitter: 0.1
+  whiteCityBuildings:
+  - {fileID: 145008, guid: 2567255f9a679cd429a31eb02ba54ac1, type: 3}
+  - {fileID: 114898, guid: 3a043cf95d828e44da52277a60eb137b, type: 3}
+  - {fileID: 105450, guid: b8800faccef09f047b9aab74ce0d163d, type: 3}
+  - {fileID: 117628, guid: 04c19027b30bcaa489b3ec4b42040dea, type: 3}
+  - {fileID: 164186, guid: 75ce498590d12b14b97bb91249eee61b, type: 3}
+  - {fileID: 127732, guid: 5268f3eea397dcb40925cb28a6e9ee0f, type: 3}
+  - {fileID: 193488, guid: ed8ca91ea98dcb54397b4145af6c0b2e, type: 3}
+  - {fileID: 198764, guid: ae79364aca7e6e74b8b8d8300b504d29, type: 3}
+  - {fileID: 145378, guid: 955bf00fba2fee14696800975b5622e5, type: 3}
+  - {fileID: 100316, guid: b00208f06b04b2447af23a7247883af2, type: 3}
+  - {fileID: 196020, guid: b331863b8ea6edc4e93fc5d6f83dbac6, type: 3}
+  - {fileID: 146522, guid: 3e758f09cb4d777459433143fc3c7892, type: 3}
+  - {fileID: 104020, guid: 6e52f6e5c549dca4381c78a24c505338, type: 3}
   whiteCityMaxStretch: 1.8
   whiteCityFootprintScale: {x: 0.5, y: 2}
   whiteCityFill: 0.92
   whiteCityOnDiagonalWalls: 1
+  whiteCityOnLandmarks: 1
+  whiteCityOnBackdrop: 1
   whiteCitySeed: 1357
-  roofPropPrefabs: []
+  roofPropPrefabs:
+  - {fileID: 159040, guid: 1fdb54cae2e5c4d4aa7e696be731acdf, type: 3}
+  - {fileID: 186680, guid: d848a27e8f2163742be2dcca2da5dfdd, type: 3}
+  - {fileID: 107054, guid: 57b98f44a00fbce429284c88b6179917, type: 3}
+  - {fileID: 138528, guid: e8c8b57239c2c844c896d6aa07e124f8, type: 3}
+  - {fileID: 127878, guid: 85200b019237e4d438a2ec33d1ab7041, type: 3}
+  - {fileID: 121964, guid: 84045e0e75e3535469f0b45824fc1287, type: 3}
+  - {fileID: 135462, guid: 68dacdb7a3a2cb6408c14f026bd9084f, type: 3}
+  - {fileID: 140792, guid: 29a990a110c2374418a2cace93ed34c5, type: 3}
+  - {fileID: 144182, guid: 9897a463ddffd62459d60fd7ab2365a7, type: 3}
+  - {fileID: 137662, guid: 21cb504748591f445bfe40ac674be242, type: 3}
+  - {fileID: 137976, guid: 805869419e70a9e4b9c9e838785d4418, type: 3}
+  - {fileID: 149826, guid: bf6998b76a98a58449dac0b8b56d447c, type: 3}
+  - {fileID: 157136, guid: f969ce493f8b49442baa03271e7f6cd1, type: 3}
+  - {fileID: 150144, guid: 94ed46bc24edf404d866285038f24641, type: 3}
+  - {fileID: 167158, guid: 8bca44552c6bbd3419a536afac67d5d7, type: 3}
+  - {fileID: 179046, guid: 20af60c63fe2b9840975f2a12385d126, type: 3}
+  - {fileID: 174700, guid: ba6d65d010e04c74492f45aada8d39d7, type: 3}
   roofPropsPerBuilding: {x: 0, y: 3}
   roofPropEdgeMargin: 2
   roofPropColliders: 0
