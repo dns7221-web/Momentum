@@ -175,6 +175,13 @@ namespace Momentum.Player
         /// </summary>
         public bool IsGrounded => _isGrounded;
 
+        // 추가 생성
+        /// <summary>
+        /// 점프 입력 액션(스페이스바). <see cref="GrappleZip"/>이 공중 웹 집 칸이 비어 있으면 빌려 간다 —
+        /// 공중에서 누른 점프는 어차피 버려지므로(FixedUpdate 참고) 같은 키를 땅/공중으로 나눠 쓴다.
+        /// </summary>
+        public InputActionReference JumpAction => jumpAction;
+
         /// <summary>연속으로 공중에 있던 시간. 착지하는 순간 즉시 0으로 되돌아간다.</summary>
         private float _airTime;
 

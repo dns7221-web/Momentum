@@ -1927,3 +1927,22 @@ PR #6의 웹 집은 크로스헤어에 건물이 없으면 반응이 없었고, 
 
 삭제: `zipLaunchSpeed`, `maxLaunchUpDot`, `launchUpBonus`, `ropeSnapTime`, `Launch()`.
 컴파일·플레이 확인 전이다.
+
+### 첫 플레이 테스트(Movie_006) 반영 — 2026-10-12
+
+PR #7~#10을 받은 뒤 첫 영상(50초)을 0.1~0.3초 간격으로 보고 문제 5개를 시스템별로 나눴다.
+분석 노트: `/mnt/project-files/notes/movie006-playtest.md`(프로젝트 공유 폴더).
+
+| 문제 | 원인 | 처리 |
+|---|---|---|
+| 카메라가 벽 속으로 (6회) | Deoccluder `Minimum Distance From Target` 2 → 캐릭터 2 m 안의 벽은 레이가 안 본다. 벽 따라 스윙(PR #7)이면 늘 그 거리 | 인스펙터 0.3 (사용자가 직접) |
+| 위에서 내려다본 채 안 돌아옴 | 세로 축 Recentering 꺼짐, Top 궤도 68° | 인스펙터 (사용자가 직접) |
+| 캐릭터가 화면 끝으로 | Composer 세로 Hard Limit 0.8, Damping 0.6 | 인스펙터 (사용자가 직접) |
+| 벽 옆에서 다림추처럼 매달림 | 줄 18 m·기본 중력이면 반 바퀴 ≈ π√(L/g) ≈ 4.3초 | `SwingConstraint.swingGravityMultiplier` 2 — 스윙 중에만 중력 추가. `AddForce`는 FixedUpdate 뒤에 적용돼 같은 스텝의 로프 구속이 못 보므로 속도를 직접 더함 |
+| 벽을 긁으며 떨어질 때 스윙이 안 걸림(추정) | 카메라가 벽을 보면 자동 앵커 이상점이 전부 건물 속 | `SwingAnchorFinder` — 앞이 벽이면 `ProjectOnPlane`으로 앞을 벽면 따라 눕힘 |
+
+같이 바꾼 조작: **공중 웹 집을 우클릭 → 스페이스바**. 점프는 공중에서 누르면 버려지므로
+(`PlayerMovement`) 같은 키를 땅=점프 / 공중=웹 집으로 나눠 쓴다. 새 액션을 만들지 않고
+`PlayerMovement.JumpAction`을 빌려 써서 씬 파일을 건드리지 않았다. 빌린 액션은 구독만 풀고
+`Disable`하지 않는다 — 끄면 점프까지 꺼진다. 공중 우클릭은 이제 아무것도 안 한다.
+컴파일·플레이 확인 전이다.

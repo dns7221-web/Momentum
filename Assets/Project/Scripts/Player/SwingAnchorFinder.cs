@@ -76,6 +76,16 @@ namespace Momentum.Player
         [Tooltip("수평 속도가 이보다 느리면 진행 방향 대신 카메라 정면을 쓴다(m/s).")]
         [Min(0f)][SerializeField] private float minForwardSpeed = 2f;
 
+        // 추가 생성 (2026-10-12, Movie_006 분석)
+        [Tooltip("앞으로 이 거리 안에 벽이 있으면 '앞'을 벽면을 따라 눕힌다(m). 0이면 끈다.\n\n" +
+                 "벽을 긁으며 떨어질 때는 수평 속도가 거의 0이라 카메라 정면을 앞으로 쓰는데, 카메라가 " +
+                 "벽을 보고 있으면 높이마다 이상점이 전부 건물 속이 되어 앵커를 하나도 못 찾는다.")]
+        [Min(0f)][SerializeField] private float frontWallCheck = 6f;
+
+        [Tooltip("벽을 따라 눕힌 방향에 벽 바깥쪽을 이만큼 섞는다. 0이면 벽과 완전히 나란하다. " +
+                 "조금 섞어야 아치가 벽을 긁지 않는다.")]
+        [Range(0f, 1f)][SerializeField] private float frontWallPushOut = 0.35f;
+
         [Header("디버그")]
         [Tooltip("켜면 마지막 탐색의 이상점과 앵커를 씬 뷰에 그린다(Gizmos).")]
         [SerializeField] private bool drawGizmos = true;
@@ -124,6 +134,21 @@ namespace Momentum.Player
                 forward = Vector3.ProjectOnPlane(viewForward, Vector3.up);
             if (forward.sqrMagnitude < 0.0001f) return false;
             forward.Normalize();
+
+            // 추가 생성 — 앞이 바로 벽이면 진행 방향을 벽면을 따라 눕힌다(frontWallCheck 툴팁 참고).
+            if (frontWallCheck > 0f &&
+                Physics.Raycast(pos, forward, out RaycastHit front, frontWallCheck,
+                                anchorMask, QueryTriggerInteraction.Ignore) &&
+                Mathf.Abs(front.normal.y) < 0.5f) // 위/아래를 보는 면(지붕·처마 밑)은 벽이 아니다
+            {
+                // 벽 법선의 수평 성분 = 벽에서 바깥으로 나가는 방향.
+                Vector3 outward = new Vector3(front.normal.x, 0f, front.normal.z).normalized;
+                // ProjectOnPlane: 벽을 파고드는 성분을 빼서 벽과 나란한 성분만 남긴다.
+                Vector3 along = Vector3.ProjectOnPlane(forward, outward);
+                // 벽을 정면으로 보면 나란한 성분이 거의 0 → 벽의 한쪽 접선을 쓴다.
+                if (along.sqrMagnitude < 0.04f) along = Vector3.Cross(Vector3.up, outward);
+                forward = (along.normalized + outward * frontWallPushOut).normalized;
+            }
 
             // 진행 방향의 오른쪽. Cross(위, 앞) = 오른쪽 (유니티는 왼손 좌표계).
             Vector3 right = Vector3.Cross(Vector3.up, forward);

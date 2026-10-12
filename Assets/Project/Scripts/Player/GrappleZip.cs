@@ -36,6 +36,12 @@ namespace Momentum.Player
         [Header("입력 (InputSystem_Actions ▸ Player ▸ Zip — 마우스 우클릭)")]
         [SerializeField] private InputActionReference zipAction = null;
 
+        // 추가 생성 — 공중 웹 집 키를 스페이스바로 옮김 (2026-10-12)
+        [Tooltip("공중 웹 집 입력. 비워두면 PlayerMovement의 Jump 액션(스페이스바)을 빌려 쓴다.\n" +
+                 "점프는 공중에서 누르면 그냥 버려지므로(PlayerMovement) 같은 키를 나눠 써도 겹치지 않는다: " +
+                 "땅에서는 점프, 공중에서는 웹 집.")]
+        [SerializeField] private InputActionReference airZipAction = null;
+
         [Header("견인")]
         [Tooltip("끌려가는 속도(m/s). 스윙 최저점 속도보다 빠르게 두면 견인이 " +
                  "'가속 수단'이 되어 스윙보다 견인만 쓰게 된다. 조금 느린 편이 좋다.")]
@@ -66,10 +72,10 @@ namespace Momentum.Player
         [Min(0f)][SerializeField] private float exitUpSpeed = 9f;
 
         // 추가 생성 — 공중 웹 집
-        [Header("공중 웹 집 (Web Zip) — 공중에서 우클릭")]
-        [Tooltip("켜면 공중 우클릭이 '앵커까지 끌려가기' 대신 스파이더맨식 웹 집이 된다.\n" +
+        [Header("공중 웹 집 (Web Zip) — 공중에서 스페이스바")]
+        [Tooltip("켜면 공중 스페이스바가 스파이더맨식 웹 집이 된다(공중 우클릭은 아무것도 안 한다).\n" +
                  "줄을 쏴서 붙으면 정해진 거리를 직선으로 빠르게 끌려가고, 끝에서 살짝 떠오르며 놓는다.\n" +
-                 "지상 우클릭(벽 견인·슬링샷)은 그대로다.")]
+                 "끄면 예전처럼 공중 우클릭이 '앵커까지 끌려가기'가 된다. 지상 우클릭(벽 견인·슬링샷)은 그대로다.")]
         [SerializeField] private bool airWebZip = true;
 
         [Tooltip("줄이 총구에서 앵커까지 날아가는 시간(초). 이 동안 줄 끝이 눈에 보이게 뻗어 나간다. " +
@@ -124,6 +130,7 @@ namespace Momentum.Player
 
         private Rigidbody _rb;
         private PlayerMovement _movement;
+        private InputActionReference _airZipInput; // 실제로 구독한 공중 웹 집 액션 (빌려 온 Jump일 수 있음)
         private Animator _animator;
 
         // 추가 생성 — 우클릭을 같이 쓰는 슬링샷. 없으면 예전처럼 견인만 한다.
@@ -186,9 +193,21 @@ namespace Momentum.Player
 
         private void OnEnable()
         {
-            if (zipAction == null) return;
-            zipAction.action.Enable();
-            zipAction.action.performed += OnZipPerformed;
+            if (zipAction != null)
+            {
+                zipAction.action.Enable();
+                zipAction.action.performed += OnZipPerformed;
+            }
+
+            // 추가 생성 — 공중 웹 집(스페이스바). 칸이 비어 있으면 점프 액션을 빌린다.
+            // 같은 오브젝트의 Awake가 먼저 끝난 뒤 OnEnable이 불리므로 _movement는 이미 채워져 있다.
+            _airZipInput = airZipAction != null ? airZipAction
+                         : _movement != null ? _movement.JumpAction : null;
+            if (_airZipInput != null)
+            {
+                _airZipInput.action.Enable(); // 이미 켜져 있으면 아무 일도 안 한다
+                _airZipInput.action.performed += OnAirZipPerformed;
+            }
         }
 
         private void OnDisable()
@@ -199,11 +218,28 @@ namespace Momentum.Player
                 zipAction.action.Disable();
             }
 
+            // 구독만 푼다. Disable은 하지 않는다 — 빌려 온 Jump 액션이면 점프까지 꺼져 버린다.
+            // 액션을 켜고 끄는 것은 그 액션의 주인(PlayerMovement)이 한다.
+            if (_airZipInput != null)
+            {
+                _airZipInput.action.performed -= OnAirZipPerformed;
+                _airZipInput = null;
+            }
+
             // 견인 중에 꺼지면 이동 쪽 스위치가 켜진 채로 남아 조작이 영영 안 먹는다.
             if (IsZipping) Stop(arrived: false);
         }
 
         private void OnZipPerformed(InputAction.CallbackContext ctx) => TryStart();
+
+        // 추가 생성 — 스페이스바. 땅에서 누르면 점프(PlayerMovement)이므로 여기선 공중일 때만 반응한다.
+        private void OnAirZipPerformed(InputAction.CallbackContext ctx)
+        {
+            if (!airWebZip || _movement == null || _movement.IsGrounded) return;
+            // 견인 중이거나 스윙 중이면 무시 — TryStart와 같은 규칙(로프와 견인이 속도를 서로 덮어쓰지 않게).
+            if (IsZipping || gun == null || gun.IsAttached) return;
+            TryStartAirZip();
+        }
 
         /// <summary>
         /// 견인을 시작한다. 스윙 중이면 무시한다.
@@ -220,14 +256,9 @@ namespace Momentum.Player
             // ClaimsPress()는 어느 순서로 불려도 같은 답을 준다(WebSlingshot 주석 참고).
             if (_slingshot != null && _slingshot.ClaimsPress()) return;
 
-            // 수정 — 공중이면 조준한 앵커가 없어도 웹 집이 나간다(스파이더맨식).
-            // 예전에는 아래 TryFindAnchor가 먼저 돌아서, 크로스헤어에 건물이 안 걸리면
-            // 우클릭이 아무 반응도 없었다.
-            if (airWebZip && _movement != null && !_movement.IsGrounded)
-            {
-                TryStartAirZip();
-                return;
-            }
+            // 수정 (2026-10-12) — 공중 웹 집은 스페이스바(OnAirZipPerformed)로 옮겼다.
+            // 공중 우클릭은 아무것도 안 한다. 여기서 막지 않으면 아래 지상용 견인이 공중에서 나간다.
+            if (airWebZip && _movement != null && !_movement.IsGrounded) return;
             // 소품은 견인 목표에서 뺀다 — 옥상 위에서 우클릭했을 때 바로 옆 드럼통으로
             // 순간 이동해버리는 사고를 막는다. 견인은 건물끼리 옮겨다니는 동작이다.
             //

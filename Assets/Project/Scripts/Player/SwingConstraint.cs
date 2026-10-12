@@ -183,6 +183,14 @@ namespace Momentum.Player
                  "이미 이보다 빠르면 건드리지 않는다.")]
         [Min(0f)][SerializeField] private float minEntrySpeed = 14f;
 
+        // 추가 생성 (2026-10-12, Movie_006 분석)
+        [Header("스윙 중력 — 아치를 빠르게")]
+        [Tooltip("스윙 중에만 중력을 이 배수로 키운다. 1이면 기본 중력.\n\n" +
+                 "진자 반 바퀴 시간 ≈ π·√(줄 길이 / 중력). 줄 18 m에 기본 중력이면 약 4.3초라, " +
+                 "최저점 근처에 오래 머물러 그냥 매달린 것처럼 보인다. 2배면 약 3.0초(√2배 빠름). " +
+                 "로프 구속이 떨어지려는 속도를 접선 속도로 바꾸므로 최저점 속도도 함께 빨라진다.")]
+        [Range(1f, 4f)][SerializeField] private float swingGravityMultiplier = 2f;
+
         /// <summary>현재 로프 길이. 구속이 실제로 쓰는 값이다.</summary>
         public float RopeLength { get; private set; }
 
@@ -529,6 +537,7 @@ namespace Momentum.Player
 
             ApplyReelVelocity(anchor, previousLength);
             ApplyPumpInput(anchor);
+            ApplySwingGravity(); // 추가 생성 — SolveRope보다 먼저: 구속이 이 낙하를 접선 속도로 바꾼다
 
             for (int i = 0; i < iterations; i++) SolveRope(anchor);
         }
@@ -852,6 +861,22 @@ namespace Momentum.Player
 
             Vector3 accel = alongPush * pumpAcceleration + steerPush * steerAcceleration;
             _rb.linearVelocity = Vector3.ClampMagnitude(velocity + accel * Time.fixedDeltaTime, maxSpeed);
+        }
+
+        // 추가 생성
+        /// <summary>
+        /// 스윙 중에만 중력을 더 건다(<see cref="swingGravityMultiplier"/>).
+        ///
+        /// Rigidbody가 이미 기본 중력(1배)을 주므로 나머지(배수 - 1)만 더한다.
+        /// Unity의 <c>AddForce(..., ForceMode.Acceleration)</c>도 같은 일을 하지만, 힘은 FixedUpdate가
+        /// 끝난 뒤 물리 스텝에서 적용돼 바로 다음 줄의 SolveRope가 보지 못한다. 그래서 이 파일의
+        /// 다른 곳(ApplyEntrySpeed, ApplyPumpInput)처럼 속도를 직접 바꾼다.
+        /// </summary>
+        private void ApplySwingGravity()
+        {
+            if (swingGravityMultiplier <= 1f) return;
+            Vector3 extra = Physics.gravity * ((swingGravityMultiplier - 1f) * Time.fixedDeltaTime);
+            _rb.linearVelocity = Vector3.ClampMagnitude(_rb.linearVelocity + extra, maxSpeed);
         }
 
         /// <summary>
