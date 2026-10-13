@@ -70,3 +70,7 @@ desktop.ini
 # 실험용 — 커밋 안 함 (GrappleFireMask 만들다 나온 중간 산출물)
 /Assets/Project/AnimationFold/SwingArmMask 1.mask
 /Assets/Project/AnimationFold/SwingArmMask 1.mask.meta
+
+# Asset Store 팩: 용량이 커서 GitHub에 안 올림. Package Manager › My Assets에서 다시 Import
+/[Aa]ssets/vrbn_studios/
+/[Aa]ssets/vrbn_studios.meta
