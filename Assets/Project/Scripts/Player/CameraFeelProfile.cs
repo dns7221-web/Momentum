@@ -95,6 +95,19 @@ namespace Momentum.Player
         [Tooltip("상황이 바뀔 때 세로 댐핑이 새 값으로 넘어가는 시간(초). 0에 가까우면 툭 바뀐다.")]
         [Min(0.01f)] public float dampingBlendTime = 0.3f;
 
+        // 추가 생성 — 벽 근처 쿠션 (2026-10-13 실험: 벽에 박을 때 카메라 급정거가 어지러움의 원인)
+        [Header("벽 근처 쿠션 (벽에 박을 때 카메라가 같이 급정거하지 않게)")]
+        [Tooltip("벽 근처·충돌 직후의 가로(X·Z) 위치 댐핑(초). 평소 값은 Orbital Follow 인스펙터 값(0.1)을 그대로 쓴다. " +
+                 "실험에서 0.6이 괜찮았다.")]
+        [Min(0f)] public float wallHorizontalDamping = 0.6f;
+
+        [Tooltip("플레이어 몸 중심에서 이 반지름(m) 안에 건물이 있으면 '벽 근처'로 본다. " +
+                 "캡슐 반지름(0.25)보다 넉넉해야 부딪히기 직전에 미리 켜진다. 20 m/s면 1 m는 약 0.05초 전이다.")]
+        [Min(0.3f)] public float wallCheckRadius = 1f;
+
+        [Tooltip("벽에서 떨어진 뒤 평소 댐핑으로 돌아가는 시간(초). 너무 짧으면 떨어지는 순간 카메라가 휙 따라붙는다.")]
+        [Min(0.01f)] public float wallReleaseTime = 0.8f;
+
         /// <summary>
         /// 상황에 맞는 기본값을 돌려준다. 모르는 상황은 땅 값으로 둔다(상황을 새로 만들면 여기에 한 줄 추가).
         /// </summary>

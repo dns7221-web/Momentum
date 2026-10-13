@@ -44,6 +44,10 @@ namespace Momentum.Player
         [Tooltip("발밑 높이를 잴 때 지면으로 볼 레이어. 건물 지붕(Anchorable)과 바닥(Ground).")]
         [SerializeField] private LayerMask groundLayers = 0;
 
+        // 추가 생성 — 벽 근처 쿠션
+        [Tooltip("'벽 근처'로 볼 레이어. 건물(Anchorable)만 — 바닥(Ground)을 넣으면 땅 가까이에서 늘 켜진다.")]
+        [SerializeField] private LayerMask wallLayers = 0;
+
         [Tooltip("켜면 Game 뷰 왼쪽 위에 지금 상황과 카메라 값을 띄운다. 튜닝할 때만 켠다.")]
         [SerializeField] private bool showDebugHud = false;
 
@@ -59,19 +63,25 @@ namespace Momentum.Player
         private GrappleGun _gun;
         private GrappleZip _zip;
         private WebSlingshot _slingshot;
+        private CapsuleCollider _capsule; // 추가 생성 — 벽 검사 구의 중심(몸 중심)을 잡는 데 쓴다
 
         // 컴포넌트를 켤 때의 인스펙터 값. 기준으로 쓰고, 끌 때 되돌린다.
         private float _baseRadius;
         private float _baseVerticalDamping;
         private float _baseVerticalCenter;
+        private Vector2 _baseHorizontalDamping; // 추가 생성 — 평소 가로 댐핑 (x, z)
 
         // SmoothDamp가 프레임 사이에 기억하는 속도
         private float _radiusVelocity;
         private float _dampingVelocity;
 
+        // 추가 생성 — 벽에서 떨어진 뒤 남은 쿠션 시간(초). 벽 근처면 wallReleaseTime으로 다시 채운다.
+        private float _wallTimer;
+
         // 디버그 표시용 마지막 계산 값
         private float _debugHeight;
         private float _debugPitch;
+        private float _debugWall01; // 추가 생성
 
         /// <summary>
         /// 컴포넌트를 처음 붙였을 때(에디터) 기본 레이어를 채운다.
@@ -80,17 +90,20 @@ namespace Momentum.Player
         private void Reset()
         {
             groundLayers = LayerMask.GetMask("Anchorable", "Ground");
+            wallLayers = LayerMask.GetMask("Anchorable"); // 추가 생성
         }
 
         private void Awake()
         {
             _orbital = GetComponent<CinemachineOrbitalFollow>();
             if (groundLayers == 0) groundLayers = LayerMask.GetMask("Anchorable", "Ground");
+            if (wallLayers == 0) wallLayers = LayerMask.GetMask("Anchorable"); // 추가 생성
         }
 
         /// <summary>
         /// 켤 때 인스펙터 값을 기억한다. Radius는 "기준 거리"로 계속 쓰이고,
         /// 세로 댐핑과 세로 Center는 이 컴포넌트가 상황마다 덮어쓴다.
+        /// 수정: 가로(X·Z) 댐핑도 기억한다 — 평소엔 이 값, 벽 근처에선 프로필의 벽 값으로 바꾼다.
         /// </summary>
         private void OnEnable()
         {
@@ -98,8 +111,11 @@ namespace Momentum.Player
             _baseRadius = _orbital.Radius;
             _baseVerticalDamping = _orbital.TrackerSettings.PositionDamping.y;
             _baseVerticalCenter = _orbital.VerticalAxis.Center;
+            Vector3 startDamping = _orbital.TrackerSettings.PositionDamping;       // 추가 생성
+            _baseHorizontalDamping = new Vector2(startDamping.x, startDamping.z);  // 추가 생성
             _radiusVelocity = 0f;
             _dampingVelocity = 0f;
+            _wallTimer = 0f; // 추가 생성
 
             if (profile == null)
                 Debug.LogWarning("TraversalCameraDirector: Profile이 비어 있어 카메라 연출을 하지 않습니다. " +
@@ -114,7 +130,9 @@ namespace Momentum.Player
             if (_orbital == null) return;
             _orbital.Radius = _baseRadius;
             Vector3 damping = _orbital.TrackerSettings.PositionDamping;
+            damping.x = _baseHorizontalDamping.x; // 추가 생성
             damping.y = _baseVerticalDamping;
+            damping.z = _baseHorizontalDamping.y; // 추가 생성
             _orbital.TrackerSettings.PositionDamping = damping;
             _orbital.VerticalAxis.Center = _baseVerticalCenter;
         }
@@ -171,7 +189,35 @@ namespace Momentum.Player
             Vector3 damping = _orbital.TrackerSettings.PositionDamping;
             damping.y = Mathf.SmoothDamp(damping.y, settings.verticalDamping,
                                          ref _dampingVelocity, profile.dampingBlendTime, Mathf.Infinity, dt);
+            // 수정: Orbital Follow에 넣는 건 아래 6번 끝에서 가로 댐핑과 함께 한 번에 한다.
+
+            // 추가 생성 — 6. 벽 근처 쿠션: 가로 댐핑.
+            //    2026-10-13 실험에서 벽에 박을 때 어지러움은 "캐릭터가 벽에 멈추면 카메라도 0.1초 만에 같이 급정거"하는 것이었다
+            //    (가로 댐핑 0.6으로 올리니 나아짐). 그렇다고 늘 0.6이면 빠른 스윙에서 카메라가 뒤처진다.
+            //    그래서 벽 근처에서만 올린다. 올릴 때는 즉시(부딪히기 전에 이미 올라가 있어야 급정거를 막는다),
+            //    내릴 때는 wallReleaseTime에 걸쳐 천천히(떨어지는 순간 휙 따라붙지 않게).
+            if (State != CameraState.Ground && IsNearWall())
+                _wallTimer = profile.wallReleaseTime;
+            else
+                _wallTimer = Mathf.Max(0f, _wallTimer - dt);
+            _debugWall01 = _wallTimer / profile.wallReleaseTime;
+            float horizontalWall = profile.wallHorizontalDamping;
+            damping.x = Mathf.Lerp(_baseHorizontalDamping.x, Mathf.Max(_baseHorizontalDamping.x, horizontalWall), _debugWall01);
+            damping.z = Mathf.Lerp(_baseHorizontalDamping.y, Mathf.Max(_baseHorizontalDamping.y, horizontalWall), _debugWall01);
             _orbital.TrackerSettings.PositionDamping = damping;
+        }
+
+        // 추가 생성
+        /// <summary>
+        /// 몸 중심 둘레 wallCheckRadius 안에 건물이 있는지. CheckSphere는 겹침 여부만 보는 가장 싼 물리 검사다(유니티 내장).
+        /// 몸 중심은 캡슐 콜라이더의 center를 월드 좌표로 바꿔 구한다(캡슐을 옮겨도 따라간다).
+        /// </summary>
+        private bool IsNearWall()
+        {
+            Vector3 center = _capsule != null
+                ? _capsule.transform.TransformPoint(_capsule.center)
+                : _body.position + Vector3.up * 0.9f; // 캡슐이 없으면 Player 프리팹의 캡슐 중심 높이(0.9)
+            return Physics.CheckSphere(center, profile.wallCheckRadius, wallLayers, QueryTriggerInteraction.Ignore);
         }
 
         /// <summary>
@@ -237,6 +283,7 @@ namespace Momentum.Player
             _gun = _body != null ? _body.GetComponentInChildren<GrappleGun>() : null;
             _zip = _body != null ? _body.GetComponentInChildren<GrappleZip>() : null;
             _slingshot = _body != null ? _body.GetComponentInChildren<WebSlingshot>() : null;
+            _capsule = _body != null ? _body.GetComponent<CapsuleCollider>() : null; // 추가 생성
         }
 
         /// <summary>
@@ -249,7 +296,8 @@ namespace Momentum.Player
             GUI.Label(new Rect(10, 10, 900, 22),
                 $"Camera {State} | Radius {_orbital.Radius:0.00} | Pitch {_debugPitch:0.0}° " +
                 $"(now {_orbital.VerticalAxis.Value:0.0}°) | DampY {_orbital.TrackerSettings.PositionDamping.y:0.00} | " +
-                $"Height {_debugHeight:0.0} m");
+                $"Height {_debugHeight:0.0} m | Wall {_debugWall01:0.00} " +  // 수정: 벽 쿠션 표시 추가
+                $"(DampXZ {_orbital.TrackerSettings.PositionDamping.x:0.00})");
         }
     }
 }
