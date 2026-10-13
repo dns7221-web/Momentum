@@ -2021,3 +2021,20 @@ Damping 1, Damping When Occluded 0.15. 컴파일·플레이 확인 전이다.
 
 사실적인 나무는 프로젝트에 없다 — 새 나무 에셋(URP, LOD Group)을 받으면 `treePrefabs`만 바꾸면 된다.
 컴파일·Generate 확인 전이다.
+
+## 스윙 카메라를 "상황에 따라 변하게" — 인섬니악 방향 1+2단계 (2026-10-13)
+
+**문제.** Movie_006~008에서 카메라 값만 계속 바꿨지만 한계가 있었다. 값이 전부 고정이라 한 상황(땅, 스윙 최저점, 떠오름, 다이브)에만 맞출 수 있었다.
+레퍼런스(인섬니악 스파이더맨)를 8가지 특징으로 나눠 비교해 보니, 상황에 따라 바뀌는 부분(구간별 구도, 속도→거리, 높이→내려다보기)이 통째로 없었다.
+기획: `notes/swing-camera-insomniac-plan.md`.
+
+**해결.** `TraversalCameraDirector`가 매 프레임 상황과 속도·스윙 구간·높이·낙하 속도를 읽어 거리·세로 각도·세로 댐핑을 바꾼다. 튜닝 값은 `CameraFeelProfile` 에셋(ScriptableObject + AnimationCurve)에 있다.
+
+| 결정 | 이유 |
+|---|---|
+| 세로 각도는 `VerticalAxis.Center`(목표)만 바꾸고, 실제 회전은 Recentering에 맡김 | Recentering은 Value 변화만 입력으로 본다(`InputAxis.TrackValueChange`). 그래서 마우스 조작·대기·부드러운 이동을 Cinemachine이 그대로 처리한다 |
+| 거리는 Radial Axis 대신 `Radius`를 SmoothDamp | Radial Axis는 마우스 휠(슬링샷 충전)에 묶여 있다. 또 축 값 변화는 Recentering Time이 같은 다른 축의 Recentering까지 멈춘다(OrbitalFollow "Sync recentering") |
+| State-Driven Camera(상황별 카메라 여러 대)를 안 씀 | 스윙은 1~2초마다 붙었다 놓기를 반복해서 카메라를 바꿀 때마다 블렌드가 보인다 |
+| 세로 댐핑을 상황별로(땅 0.15, 스윙 0.6) | 진자의 10 m 오르내림을 카메라가 절반쯤만 따라가야 화면이 덜 출렁인다 |
+
+컴파일·플레이 확인 전이다.
