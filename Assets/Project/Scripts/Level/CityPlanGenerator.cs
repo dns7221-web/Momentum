@@ -36,6 +36,11 @@ namespace Momentum.Level
         [Tooltip("선택했을 때 생성 전 미리보기(필지·사선 벽·광장)를 씬 뷰에 그린다.")]
         [SerializeField] private bool drawGizmos = true;
 
+        // 추가 생성 — 플레이어 시작 위치 (2026-10-14)
+        [Header("플레이어 시작 위치")]
+        [Tooltip("Generate가 끝나면 이 오브젝트를 시작 옥상 위로 옮긴다. 비우면 옮기지 않는다.")]
+        [SerializeField] private Transform spawnTarget = null;
+
         public CityPlanSettings Settings => settings;
         public Transform GeneratedRoot => transform.Find(RootName);
         public bool HasGenerated => GeneratedRoot != null;
@@ -193,6 +198,8 @@ namespace Momentum.Level
             int roofProps = CreateRoofProps(root.transform, anchorLayer);
             int streetProps = CreateStreetProps(root.transform, anchorLayer);
             int clutter = CreateClutter(root.transform, layout);
+            // 추가 생성 — 도시를 다시 만들 때마다 플레이어가 건물 속에 박히지 않게 시작 옥상으로 옮긴다.
+            PlaceSpawn(built, anchorLayer);
 
             if (settings.markStatic) MarkStaticRecursive(root);
 
@@ -212,6 +219,91 @@ namespace Momentum.Level
                 Debug.Log($"[CityPlanGenerator] WhiteCity에 맞는 건물이 없어 회색 박스로 남긴 자리 {whiteCityFallback}곳. " +
                           "대부분 봉우리 근처의 아주 높은 필지다. whiteCityMaxStretch를 올리면 줄어든다.", this);
             }
+        }
+
+        // ─── 플레이어 시작 위치 ───
+
+        // 추가 생성 (2026-10-14)
+        /// <summary>
+        /// 플레이어를 spawnAvenue(기본 A3, R-A 중앙 직선)의 남쪽 끝에서 <b>가장 높은 옥상</b>,
+        /// 애비뉴 쪽 가장자리에 북쪽(+Z)을 보게 세운다.
+        ///
+        /// 웹스윙 기준으로 고른 자리다. 높은 곳은 위치에너지라 첫 낙하에서 바로 속도가 붙고,
+        /// 앞에는 양쪽 벽이 12 m 거리에 있는 474 m 직선이 놓여 시작하자마자 스윙으로 이어진다.
+        /// 좌표를 손으로 박아 두면 도시를 다시 만들 때마다 건물 속에 갇히므로 생성 결과에서 찾는다.
+        /// </summary>
+        private void PlaceSpawn(List<BuiltLot> built, int anchorLayer)
+        {
+            if (spawnTarget == null) return;
+
+            PlanAvenue avenue = settings.SortedAvenues().Find(a => a.id == settings.spawnAvenue);
+            if (avenue == null)
+            {
+                Debug.LogWarning($"[CityPlanGenerator] 시작 애비뉴 '{settings.spawnAvenue}'가 없어 플레이어를 옮기지 않았다.", this);
+                return;
+            }
+
+            // 1) Z 범위 안에서 애비뉴를 바라보는 필지 중 가장 높은 것.
+            //    서쪽 면 필지의 서쪽 끝이 애비뉴 동쪽 끝에 붙어 있거나, 동쪽 면 필지의 동쪽 끝이 애비뉴 서쪽 끝에 붙어 있으면 바라보는 것이다.
+            bool found = false;
+            BuiltLot best = default;
+            foreach (var b in built)
+            {
+                float cz = (b.lot.z0 + b.lot.z1) * 0.5f;
+                if (cz < settings.spawnZRange.x || cz > settings.spawnZRange.y) continue;
+
+                bool faces = (b.lot.side == PlanLotSide.West && Mathf.Abs(b.lot.x0 - avenue.MaxX) < 0.5f) ||
+                             (b.lot.side == PlanLotSide.East && Mathf.Abs(b.lot.x1 - avenue.MinX) < 0.5f);
+                if (!faces) continue;
+
+                if (!found || b.meta.height > best.meta.height)
+                {
+                    best = b;
+                    found = true;
+                }
+            }
+
+            if (!found)
+            {
+                Debug.LogWarning($"[CityPlanGenerator] {settings.spawnAvenue}를 바라보는 필지가 Z {settings.spawnZRange} 안에 없어 " +
+                                 "플레이어를 옮기지 않았다.", this);
+                return;
+            }
+
+            // 2) 옥상의 애비뉴 쪽 가장자리에서 spawnEdgeInset만큼 안쪽, 필지 Z 가운데.
+            float edgeX = best.lot.side == PlanLotSide.West
+                ? best.lot.x0 + settings.spawnEdgeInset
+                : best.lot.x1 - settings.spawnEdgeInset;
+            float z = (best.lot.z0 + best.lot.z1) * 0.5f;
+
+            Vector3 roof;
+            if (best.greybox)
+            {
+                // 회색 박스는 평평한 박스 윗면이라 높이를 그대로 안다 (RoofProbe는 BoxCollider를 무시한다).
+                roof = transform.TransformPoint(new Vector3(edgeX, best.meta.height, z));
+            }
+            else
+            {
+                // 에셋 건물은 파라펫·실외기·안테나가 섞여 있어 실제 밟히는 옥상을 레이로 찾는다.
+                int mask = anchorLayer >= 0 ? (1 << anchorLayer) : ~0;
+                Vector3 origin = transform.TransformPoint(new Vector3(edgeX, best.meta.height + RoofProbe.Margin, z));
+                if (!RoofProbe.TryFindRoofFromTop(origin, best.meta.height + RoofProbe.Margin * 2f,
+                                                  best.meta.transform, mask, out roof))
+                {
+                    Debug.LogWarning($"[CityPlanGenerator] 시작 필지 {best.lot.id}에서 옥상 면을 못 찾아 플레이어를 옮기지 않았다.", this);
+                    return;
+                }
+            }
+
+            // 3) Undo에 남기고 옮긴다. 5 cm 띄워 시작 프레임에 바닥과 겹치지 않게 한다.
+#if UNITY_EDITOR
+            UnityEditor.Undo.RecordObject(spawnTarget, "Place Player Spawn");
+#endif
+            spawnTarget.SetPositionAndRotation(roof + Vector3.up * 0.05f,
+                                               Quaternion.LookRotation(transform.forward, Vector3.up));
+
+            Debug.Log($"[CityPlanGenerator] 플레이어 시작 위치: {best.lot.id} 옥상 ({roof.x:F1}, {roof.y:F1}, {roof.z:F1}), " +
+                      $"{settings.spawnAvenue}를 따라 북쪽을 본다.", spawnTarget);
         }
 
         [ContextMenu("Clear")]
@@ -1111,6 +1203,8 @@ namespace Momentum.Level
                 tree.transform.localScale *= spec.scale * jitter;
                 lift = spec.lift * jitter;
                 AddMeshColliders(tree, true);
+                // 추가 생성 — 나무 프리팹에 딸린 파티클(나뭇잎 떨어지기 등)을 끈다. 설정에서 켜면 그대로 둔다.
+                if (!settings.treeLeafParticles) DisableParticles(tree);
             }
             else
             {
@@ -1336,7 +1430,8 @@ namespace Momentum.Level
                 {
                     // 프리팹 옥상은 파라펫·실외기가 섞여 있어 실제 밟히는 면을 레이로 찾는다.
                     Vector3 origin = parent.TransformPoint(new Vector3(at.x, b.meta.height + RoofProbe.Margin, at.y));
-                    if (!RoofProbe.TryFindWalkableSurface(origin, RoofProbe.Margin * 2f, b.meta.transform, anchorMask, out Vector3 spotWorld))
+                    // 수정 — ±Margin 창 대신 건물 높이 전체를 위에서부터 훑는다 (안테나 있는 건물·계단식 모서리 대응, 2026-10-14)
+                    if (!RoofProbe.TryFindRoofFromTop(origin, b.meta.height + RoofProbe.Margin * 2f, b.meta.transform, anchorMask, out Vector3 spotWorld))
                     {
                         missed++;
                         continue;
@@ -1533,15 +1628,25 @@ namespace Momentum.Level
             probe.transform.localRotation = Quaternion.identity;
 
             var renderers = probe.GetComponentsInChildren<Renderer>();
-            if (renderers.Length == 0)
+
+            // 수정 — 파티클 렌더러는 규격 측정에서 뺀다 (2026-10-14).
+            // Realistic Tree 나무처럼 루트에 나뭇잎 파티클이 붙은 프리팹은 파티클 범위가 섞이면
+            // 키가 실제와 다르게 재져서 treeHeight에 맞출 때 크기가 어긋난다.
+            bool found = false;
+            foreach (var r in renderers)
+            {
+                if (r is ParticleSystemRenderer) continue;
+                if (!found) { bounds = r.bounds; found = true; }
+                else bounds.Encapsulate(r.bounds);
+            }
+
+            if (!found)
             {
                 Debug.LogWarning($"[CityPlanGenerator] '{prefab.name}'에 렌더러가 없어 규격을 잴 수 없다.", this);
                 DestroyObject(probe);
                 return false;
             }
 
-            bounds = renderers[0].bounds;
-            for (int i = 1; i < renderers.Length; i++) bounds.Encapsulate(renderers[i].bounds);
             DestroyObject(probe);
             return true;
         }
@@ -1560,6 +1665,24 @@ namespace Momentum.Level
                 var mc = filter.gameObject.AddComponent<MeshCollider>();
                 mc.sharedMesh = filter.sharedMesh;
                 mc.convex = convex;
+            }
+        }
+
+        // 추가 생성
+        /// <summary>
+        /// 프리팹에 딸린 파티클을 모두 끈다 (2026-10-14).
+        /// 공원 나무가 수십 그루라 파티클이 전부 돌면 비용이 크고, 스윙 속도에서는 거의 보이지 않는다.
+        /// 프리팹 인스턴스라 컴포넌트를 지우지 않고 꺼 두기만 한다 — 프리팹 연결이 그대로 남는다.
+        /// </summary>
+        private static void DisableParticles(GameObject go)
+        {
+            foreach (var ps in go.GetComponentsInChildren<ParticleSystem>(true))
+            {
+                var main = ps.main;
+                main.playOnAwake = false;                                       // Play 모드에서 저절로 재생되지 않게
+                ps.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear); // 이미 돌고 있는 것도 멈추고 지운다
+                var r = ps.GetComponent<ParticleSystemRenderer>();
+                if (r != null) r.enabled = false;                               // 혹시 재생돼도 그리지 않게
             }
         }
 

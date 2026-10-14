@@ -200,17 +200,28 @@ namespace Momentum.Level
 
                     Vector3 origin = building.transform.TransformPoint(
                         new Vector3(local.x, building.height + RoofProbe.Margin, local.y));
-                    if (!RoofProbe.TryFindWalkableSurface(origin, RoofProbe.Margin * 2f, building.transform, anchorMask,
-                                                          out Vector3 spot))
+                    // 수정 — ±Margin 창 대신 건물 높이 전체를 위에서부터 훑는다 (안테나 있는 건물 대응, 2026-10-14)
+                    if (!RoofProbe.TryFindRoofFromTop(origin, building.height + RoofProbe.Margin * 2f, building.transform, anchorMask,
+                                                      out Vector3 spot))
                     {
                         missed++;
                         continue;
                     }
 
+                    // 추가 생성 — 옥상에 비해 큰 소품은 줄여서 얹는다. 지우지 않아 소품 종류는 그대로 섞인다.
+                    // 옥상 짧은 변의 roofPropMaxRoofRatio, 높이 roofPropMaxHeight 안에 들어가는 가장 큰 배율.
+                    float roofShort = Mathf.Min(building.footprint.x, building.footprint.y);
+                    float wide = Mathf.Max(0.01f, Mathf.Max(spec.bounds.size.x, spec.bounds.size.z));
+                    float tall = Mathf.Max(0.01f, spec.bounds.size.y);
+                    float scale = Mathf.Min(1f, Mathf.Min(roofShort * settings.roofPropMaxRoofRatio / wide,
+                                                          settings.roofPropMaxHeight / tall));
+
                     var prop = InstantiateLinked(spec.prefab);
                     prop.transform.SetParent(root.transform, false);
                     prop.transform.rotation = Quaternion.Euler(0f, yaw, 0f);
-                    prop.transform.position = spot - Vector3.up * spec.bounds.min.y;
+                    // 추가 생성 — 배율 적용. 밑면 보정(bounds.min.y)도 같은 배율로 줄여야 바닥에 붙는다.
+                    prop.transform.localScale *= scale;
+                    prop.transform.position = spot - Vector3.up * spec.bounds.min.y * scale;
                     if (settings.roofPropColliders) AddMeshColliders(prop, true);
                     total++;
                 }
