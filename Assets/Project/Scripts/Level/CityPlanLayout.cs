@@ -178,11 +178,13 @@ namespace Momentum.Level
                         {
                             float w = widths[(int)Math.Floor(pick.Next() * 3.0)];
                             // 남은 길이가 가장 좁은 필지보다 짧아지면 마지막 필지가 전부 가져간다.
-                            if (length - along - w < s.minRemainder) w = length - along;
+                            // 수정 — 다음 필지는 골목(lotGap) 뒤에서 시작하므로 남은 길이에서 골목 폭도 뺀다 (V4).
+                            if (length - along - w - s.lotGap < s.minRemainder) w = length - along;
 
                             float lx0 = side == PlanLotSide.West ? x0 : x1 - depth;
                             TryAddLot(block, side, number++, lx0, lx0 + depth, z0 + along, z0 + along + w, KindForWidth(w));
-                            along += w;
+                            // 수정 — 필지 폭에 골목 폭을 더해 다음 시작점으로 옮긴다. 마지막 필지 뒤에서는 while 조건이 끝낸다.
+                            along += w + s.lotGap;
                         }
                     }
 

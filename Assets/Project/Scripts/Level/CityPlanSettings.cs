@@ -275,6 +275,10 @@ namespace Momentum.Level
         public float lotWidthSmall = 13f;
         [Tooltip("남은 길이가 이보다 짧으면 마지막 필지가 나머지를 흡수하고 회색 박스가 된다.")]
         public float minRemainder = 13f;
+        // 추가 생성 — 애비뉴 면 필지 사이 골목 (V4, 2026-10-14)
+        [Tooltip("애비뉴 면 필지를 하나 끊은 뒤 이만큼 비우고 다음 필지를 시작한다. 0이면 V3처럼 빈틈없이 붙는다. " +
+                 "웹 사거리(22 m)보다 충분히 좁아야 벽을 따라가는 스윙이 끊기지 않는다.")]
+        [Min(0f)] public float lotGap = 4f;
 
         [Tooltip("사선 중심선에서 이 거리 안쪽과 겹치는 필지는 지운다. 그 띠는 사선 가로벽 자리다.")]
         public float diagonalBandOuter = 28f;
@@ -329,6 +333,16 @@ namespace Momentum.Level
         [Tooltip("건물 방향(90°·180° 뒤집기) 난수 시드.")]
         public int orientationSeed = 911;
 
+        // 추가 생성 — 플레이어 시작 위치 (2026-10-14)
+        [Header("플레이어 시작 위치")]
+        [Tooltip("이 애비뉴를 바라보는 건물 옥상에서 시작한다. 기본 A3 = R-A 중앙 직선(474 m)의 남쪽 끝.")]
+        public string spawnAvenue = "A3";
+        [Tooltip("후보 필지를 찾을 Z 범위 (남쪽 끝, 북쪽 끝). 이 안에서 가장 높은 옥상을 고른다 — " +
+                 "높을수록 첫 낙하에서 바로 속도를 얻는다.")]
+        public Vector2 spawnZRange = new Vector2(-406f, -300f);
+        [Tooltip("옥상의 애비뉴 쪽 가장자리에서 이만큼 안쪽에 세운다. 너무 작으면 파라펫 위에 선다.")]
+        [Min(0.5f)] public float spawnEdgeInset = 2f;
+
         [Header("물리")]
         [Tooltip("이 도시가 가정하는 중력 배율. 생성기 Awake에서 Physics.gravity에 건다.")]
         [Range(0.5f, 5f)] public float gravityScale = 1.5f;
@@ -375,6 +389,10 @@ namespace Momentum.Level
         [Tooltip("나무 높이를 ± 이 비율만큼 흔든다. 0.1이면 treeHeight의 90~110%. 같은 나무가 줄지어 보이지 않게 한다. " +
                  "공원 나무는 저공 앵커(기획안 12 m)라 크게 흔들면 스윙 높이가 달라진다.")]
         [Range(0f, 0.5f)] public float treeHeightJitter = 0.1f;
+        // 추가 생성 — 나무 프리팹에 딸린 파티클 켜기/끄기 (2026-10-14)
+        [Tooltip("나무 프리팹에 붙은 파티클(Realistic Tree의 나뭇잎 떨어지기 등)을 그대로 재생한다. " +
+                 "끄면 생성할 때 꺼 둔다 — 공원 나무 수십 그루가 모두 파티클을 돌리면 비용이 크다.")]
+        public bool treeLeafParticles = false;
 
         // 수정 — 목록 이름은 그대로 두고(바꾸면 저장된 값이 사라진다) 설명만 넓혔다. 어떤 건물 에셋이든 넣을 수 있다.
         [Header("건물 프리팹 (회색 박스 대체) — WhiteCity·새 도시 에셋 모두 가능, 비우면 회색 박스 그대로")]
@@ -405,6 +423,11 @@ namespace Momentum.Level
         [Min(0f)] public float roofPropEdgeMargin = 2f;
         [Tooltip("소품에 충돌체를 단다. 끄면 보이기만 하고 착지에 걸리지 않는다.")]
         public bool roofPropColliders = false;
+        // 추가 생성 — 옥상 소품 크기 상한 (2026-10-14)
+        [Tooltip("소품의 가로 크기가 옥상 짧은 변의 이 비율을 넘으면 그 안에 들어가게 줄인다.")]
+        [Range(0.1f, 1f)] public float roofPropMaxRoofRatio = 0.35f;
+        [Tooltip("소품 높이(m)가 이보다 크면 이 높이에 맞춰 줄인다. 크레인·탑 같은 큰 소품이 건물보다 튀지 않게.")]
+        [Min(0.5f)] public float roofPropMaxHeight = 6f;
 
         [Header("도로 소품 (Kenney city-kit-roads) — 빈 칸은 건너뛴다")]
         [Tooltip("light-curved 등. 피벗(기둥 밑)을 기준으로 세운다.")]

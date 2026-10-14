@@ -13,13 +13,16 @@ MonoBehaviour:
   m_Name: CityPlan_v3
   m_EditorClassIdentifier: Assembly-CSharp::Momentum.Level.CityPlanSettings
   land:
-    x0: -200
-    x1: 200
+    x0: -284
+    x1: 284
     z0: -430
     z1: 430
   citySouthZ: -406
   cityNorthZ: 416
   avenues:
+  - id: A0
+    centerX: -252
+    width: 24
   - id: A1
     centerX: -168
     width: 24
@@ -34,6 +37,9 @@ MonoBehaviour:
     width: 24
   - id: A5
     centerX: 168
+    width: 24
+  - id: A6
+    centerX: 252
     width: 24
   streets:
   - id: S1
@@ -67,13 +73,13 @@ MonoBehaviour:
     center: {x: -84, y: 74}
     radius: 34
   westPromenade:
-    x0: -200
-    x1: -180
+    x0: -284
+    x1: -264
     z0: -430
     z1: 430
   southPromenade:
-    x0: -180
-    x1: 180
+    x0: -264
+    x1: 264
     z0: -430
     z1: -406
   landmarks:
@@ -99,8 +105,8 @@ MonoBehaviour:
       z1: 188
     height: 132
   railDeck:
-    x0: 173
-    x1: 179
+    x0: 257
+    x1: 263
     z0: -390
     z1: 68
   railDeckTop: 12
@@ -108,31 +114,31 @@ MonoBehaviour:
   railPillarSpacing: 24
   railPillarSize: 1.2
   water:
-  - x0: -260
-    x1: -200
+  - x0: -344
+    x1: -284
     z0: -490
     z1: 430
-  - x0: -200
-    x1: 200
+  - x0: -284
+    x1: 284
     z0: -490
     z1: -430
   waterSurfaceY: -2
   riverbedY: -3
   piers:
-  - x0: -228
-    x1: -200
+  - x0: -312
+    x1: -284
     z0: -334
     z1: -326
-  - x0: -228
-    x1: -200
+  - x0: -312
+    x1: -284
     z0: -154
     z1: -146
-  - x0: -228
-    x1: -200
+  - x0: -312
+    x1: -284
     z0: 106
     z1: 114
-  - x0: -228
-    x1: -200
+  - x0: -312
+    x1: -284
     z0: 226
     z1: 234
   - x0: -144
@@ -144,13 +150,13 @@ MonoBehaviour:
     z0: -458
     z1: -430
   backdropEast:
-    x0: 180
-    x1: 200
+    x0: 264
+    x1: 284
     z0: -406
     z1: 416
   backdropNorth:
-    x0: -200
-    x1: 200
+    x0: -284
+    x1: 284
     z0: 416
     z1: 430
   backdropSegment: 20
@@ -164,6 +170,7 @@ MonoBehaviour:
   lotWidthMedium: 15
   lotWidthSmall: 13
   minRemainder: 13
+  lotGap: 4
   diagonalBandOuter: 28
   diagonalWallOffset: 20
   diagonalWallLength: 18
@@ -191,10 +198,10 @@ MonoBehaviour:
   minHeight: 34
   greyboxOverMax: 8
   greyboxHeightStep: 3
-  treeSpacing: 15
+  treeSpacing: 10
   treeInset: 8
-  treeSkipChance: 0.25
-  treeHeight: 12
+  treeSkipChance: 0.1
+  treeHeight: 18
   treeSeed: 77
   backdropSeed: 31
   orientationSeed: 911
@@ -212,15 +219,56 @@ MonoBehaviour:
   surfaceColliders: 1
   roofRailPrefab: {fileID: 919132149155446097, guid: 9bd54e536f92a2b4788aad93fb3369fb, type: 3}
   roofRailInset: 0.3
-  treePrefab: {fileID: 919132149155446097, guid: e5e18efe425bd3f49931465a07fe3718, type: 3}
+  treePrefab: {fileID: 299712424454941021, guid: 022485ff60e4a26418217d8ab778a812, type: 3}
   treeFitHeight: 1
   treePrefabs:
-  - {fileID: 919132149155446097, guid: e5e18efe425bd3f49931465a07fe3718, type: 3}
-  - {fileID: 919132149155446097, guid: 95edd1880b9482b4b80f2b34b224e4a4, type: 3}
-  - {fileID: 919132149155446097, guid: ff4177cc03704bb4284f816d26b206a3, type: 3}
-  - {fileID: 919132149155446097, guid: 231e500bb01279d4c93aca2da787dd2e, type: 3}
-  - {fileID: 919132149155446097, guid: 018dc4e70c5737d4eb272e7368ee65b4, type: 3}
-  - {fileID: 919132149155446097, guid: 19fe9a439238f39458ef376140d2cddb, type: 3}
+  - {fileID: 299712424454941021, guid: 022485ff60e4a26418217d8ab778a812, type: 3}
+  - {fileID: 5530652132047498927, guid: 40cc2dd6b744b344a9a4ea56076c47fb, type: 3}
+  - {fileID: 5400752399725384465, guid: af90fe2f0f252bf4b8c2ab79bcd41edf, type: 3}
+  - {fileID: 8185793832496569501, guid: 3bcf6e78553a7f54c8bf39912b4124e3, type: 3}
+  - {fileID: 8185793832496569501, guid: 632cb5ba8e6554c4d895ced6ffb22702, type: 3}
+  - {fileID: 8185793832496569501, guid: 189457b8a8df4454e955c74118b57a4d, type: 3}
+  - {fileID: 8185793832496569501, guid: 35e42d18fc5193b42b806528fbefddeb, type: 3}
+  - {fileID: 8185793832496569501, guid: 396e4e2bcb4c3374c90c240769020c51, type: 3}
+  - {fileID: 8185793832496569501, guid: 209b15dd421b315458b25e6457874d89, type: 3}
+  - {fileID: 8185793832496569501, guid: 9e065bacc309f8a4c877f23b4b5eebf8, type: 3}
+  - {fileID: 8185793832496569501, guid: 0a3312199122e69409623fdbdbe357d0, type: 3}
+  - {fileID: 3416579149820165379, guid: 6fcf7f27da01aba499a0be03812f9f67, type: 3}
+  - {fileID: 3416579149820165379, guid: 630008e1b31fe954ab798b6059e44fe2, type: 3}
+  - {fileID: 3416579149820165379, guid: d84fef165871de449b201d71418260b4, type: 3}
+  - {fileID: 3416579149820165379, guid: dad071d6bb455bd4ea32d2b486ffeae1, type: 3}
+  - {fileID: 3416579149820165379, guid: d545a4c991f4a394fa3eafaddfdc0f83, type: 3}
+  - {fileID: 3416579149820165379, guid: 80e6f5c1539d4224db7b9fbd16fc3022, type: 3}
+  - {fileID: 3416579149820165379, guid: affe17d38a3d2d54eac468a8349625db, type: 3}
+  - {fileID: 3416579149820165379, guid: a6b5ce7010c086147a5219bec6747282, type: 3}
+  - {fileID: 3416579149820165379, guid: b4b2a6f205b7d064f87f3566a03e10a9, type: 3}
+  - {fileID: 3416579149820165379, guid: f16a6efbbe67d3b44999df7a32c32b27, type: 3}
+  - {fileID: 1991462268964490261, guid: 733e0985fe2f8674981f217143ec930a, type: 3}
+  - {fileID: 1991462268964490261, guid: 39460f06c7d6a25459bdfcf49f99a801, type: 3}
+  - {fileID: 1991462268964490261, guid: 48c03ef913cc61846a12cb8f6dc7ff8e, type: 3}
+  - {fileID: 1991462268964490261, guid: ea00aff9c9f90504daf5192b2b6f6527, type: 3}
+  - {fileID: 1991462268964490261, guid: 0a37a79028ba9924a819af7ab8357711, type: 3}
+  - {fileID: 1991462268964490261, guid: 43d33c55046b8e6498be1b030c29b239, type: 3}
+  - {fileID: 1991462268964490261, guid: 62877a2894356f7408f0565824d414c2, type: 3}
+  - {fileID: 1991462268964490261, guid: c4b1d2c471aaff04898b4c566e7d08f2, type: 3}
+  - {fileID: 5503166992987660084, guid: a6f21f9d15f76f244a354206c7dcaad2, type: 3}
+  - {fileID: 5503166992987660084, guid: 4bee1c1e17211494f9be6522b74f9863, type: 3}
+  - {fileID: 5503166992987660084, guid: 23c628b176d04df4a83eabf82d31b32d, type: 3}
+  - {fileID: 5503166992987660084, guid: f3eefa452c5e31a4982e3e0d71adcaec, type: 3}
+  - {fileID: 5503166992987660084, guid: 11771f4bdb563b94f8dc795979cc688c, type: 3}
+  - {fileID: 5503166992987660084, guid: a89bea7274b16dd48b641c1547ee91e1, type: 3}
+  - {fileID: 5503166992987660084, guid: 146e4f73f7d49b74a87492bbe5d2b2c1, type: 3}
+  - {fileID: 5503166992987660084, guid: bdb54f87028a0a142825ab3bb011519a, type: 3}
+  - {fileID: 5503166992987660084, guid: 16c89684cc110f94fa0d913f5ac4611d, type: 3}
+  - {fileID: 5503166992987660084, guid: 09d870b9c6c78ab42b89e0e94120bc08, type: 3}
+  - {fileID: 6313178463543892440, guid: 00504f464b42d1d45a2dc24ba9eade1e, type: 3}
+  - {fileID: 6313178463543892440, guid: 0bd944d7ec2d7e14d897ddb1e56c4d88, type: 3}
+  - {fileID: 6313178463543892440, guid: cbf47b70bd6ac6645b3d0a0a21175184, type: 3}
+  - {fileID: 6313178463543892440, guid: b7188c4920b915d41a1c3a5cdf968f12, type: 3}
+  - {fileID: 6313178463543892440, guid: 5c12347a16d26c54581c374aee9a306f, type: 3}
+  - {fileID: 6313178463543892440, guid: 129bedf984284034585eb52bf4b24977, type: 3}
+  - {fileID: 6313178463543892440, guid: 11f41b79841e8084397607b8a0d001ba, type: 3}
+  - {fileID: 6313178463543892440, guid: 27a0eee291be7a6428f36c5bcbd6c4f9, type: 3}
   treeHeightJitter: 0.1
   whiteCityBuildings:
   - {fileID: 145008, guid: 2567255f9a679cd429a31eb02ba54ac1, type: 3}
@@ -236,12 +284,26 @@ MonoBehaviour:
   - {fileID: 196020, guid: b331863b8ea6edc4e93fc5d6f83dbac6, type: 3}
   - {fileID: 146522, guid: 3e758f09cb4d777459433143fc3c7892, type: 3}
   - {fileID: 104020, guid: 6e52f6e5c549dca4381c78a24c505338, type: 3}
-  whiteCityMaxStretch: 1.8
+  - {fileID: 5252596072409286716, guid: dc6d9dc606451fd478d7f47fde5c8cf2, type: 3}
+  - {fileID: 6135956838620006172, guid: 898bb0bd63f3a7549899c774f458436b, type: 3}
+  - {fileID: 5793094663939754793, guid: c31f21600f74c3641a1e9ddcc2cb49a3, type: 3}
+  - {fileID: 1376896754077965106, guid: 8927c686c1fa8bf42a86d5ed99432307, type: 3}
+  - {fileID: 647642153153899241, guid: 630dab07a6d8a854aaa8499ca3697280, type: 3}
+  - {fileID: 7702301402852191080, guid: 9aa16a4ba0abc1e4c880fc555158cd0a, type: 3}
+  - {fileID: 8822909159841468804, guid: b7f261eee3e120f42833765ee0ea8b09, type: 3}
+  - {fileID: 5017414480393023548, guid: 5c1a773d64c5bce4ba0684f0a22aa5e1, type: 3}
+  - {fileID: 3529715126597103626, guid: 914c69702661d7d449a7029edaa1c032, type: 3}
+  - {fileID: 3495852240388143614, guid: 43670671822075744b4c9cf6dccecaeb, type: 3}
+  - {fileID: 4670352397538661150, guid: c90e25445fc03c34680a289757b11be7, type: 3}
+  - {fileID: 616424710535142339, guid: 3cd26b605684d864a86761d94034bb45, type: 3}
+  - {fileID: 5573473162448820423, guid: 1517268e79c387445b9b1af145a414e6, type: 3}
+  - {fileID: 5142337645723156185, guid: 5ed8705efde00404ab6a4a2eb71166d8, type: 3}
+  whiteCityMaxStretch: 1.15
   whiteCityFootprintScale: {x: 0.5, y: 2}
   whiteCityFill: 0.92
   whiteCityOnDiagonalWalls: 1
-  whiteCityOnLandmarks: 1
-  whiteCityOnBackdrop: 1
+  whiteCityOnLandmarks: 0
+  whiteCityOnBackdrop: 0
   whiteCitySeed: 1357
   roofPropPrefabs:
   - {fileID: 159040, guid: 1fdb54cae2e5c4d4aa7e696be731acdf, type: 3}
@@ -260,7 +322,6 @@ MonoBehaviour:
   - {fileID: 150144, guid: 94ed46bc24edf404d866285038f24641, type: 3}
   - {fileID: 167158, guid: 8bca44552c6bbd3419a536afac67d5d7, type: 3}
   - {fileID: 179046, guid: 20af60c63fe2b9840975f2a12385d126, type: 3}
-  - {fileID: 174700, guid: ba6d65d010e04c74492f45aada8d39d7, type: 3}
   roofPropsPerBuilding: {x: 0, y: 3}
   roofPropEdgeMargin: 2
   roofPropColliders: 0
@@ -286,7 +347,10 @@ MonoBehaviour:
   dockProps: []
   dockPropGap: 2
   dockPropSkipChance: 0.25
-  yardProps: []
+  yardProps:
+  - prefab: {fileID: 174700, guid: ba6d65d010e04c74492f45aada8d39d7, type: 3}
+    length: 0
+    weight: 1
   yardPropsPerBlock: 4
   clutterSeed: 2024
   greyboxMaterials: []
