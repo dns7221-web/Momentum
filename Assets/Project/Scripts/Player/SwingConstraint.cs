@@ -187,6 +187,44 @@ namespace Momentum.Player
         [Min(0f)][SerializeField] private float steerAcceleration = 9f;
 
         // 추가 생성
+        // 추가 생성 — 스윙 점프 (2026-10-14)
+        [Header("스윙 점프 — 스윙 중 스페이스바로 놓으며 더 멀리")]
+        [Tooltip("스윙 점프 입력. 비워두면 PlayerMovement의 Jump 액션(스페이스바)을 빌려 쓴다 — GrappleZip과 같은 방식.")]
+        [SerializeField] private InputActionReference jumpAction = null;
+        [Tooltip("켜면 스윙 중 스페이스바가 줄을 놓으며 점프 보너스를 얹는다.")]
+        [SerializeField] private bool swingJump = true;
+        [Tooltip("'좋은 점프' 타이밍 — 줄이 수직에서 진행 방향 앞쪽으로 지나간 각도(최소, 최대 °). 이 안에서 올라가는 중이면 큰 보너스.")]
+        [SerializeField] private Vector2 goodJumpWindow = new Vector2(25f, 65f);
+        [Tooltip("좋은 점프 보너스 (x = 앞 m/s, y = 위 m/s).")]
+        [SerializeField] private Vector2 goodJumpBonus = new Vector2(4f, 7f);
+        [Tooltip("타이밍 밖에서 누른 점프 보너스 (x = 앞 m/s, y = 위 m/s).")]
+        [SerializeField] private Vector2 plainJumpBonus = new Vector2(1.5f, 3f);
+        [Tooltip("스윙 점프일 때만 놓기 높이 상한(앵커 + releaseApexAboveAnchor)을 이만큼 더 풀어 준다(m).")]
+        [Min(0f)][SerializeField] private float jumpExtraApex = 4f;
+
+        // 추가 생성 — 줄 길이 자동 (2026-10-14)
+        [Header("줄 길이 자동 — 아치 최저점이 땅에 끌리지 않게")]
+        [Tooltip("켜면 붙는 순간 앵커 아래 땅까지 재서, 최저점이 땅보다 아래 여유만큼 위에 오도록 줄을 자동으로 감는다. " +
+                 "끄면 예전처럼 휠로만 길이를 바꾼다.")]
+        [SerializeField] private bool autoRopeLength = true;
+        [Tooltip("진자 최저점과 땅(또는 아래 건물 선반) 사이에 남길 여유(m). 크면 높게 돌고, 작으면 땅을 스치듯 지나간다.")]
+        [Min(0f)][SerializeField] private float autoBottomClearance = 6f;
+        [Tooltip("앵커 아래로 땅을 찾는 최대 거리(m). 이 안에 아무것도 없으면 제한하지 않는다.")]
+        [Min(10f)][SerializeField] private float autoProbeDistance = 200f;
+
+        // 추가 생성 — 코너 스윙 (2026-10-14)
+        [Header("코너 스윙 — 교차로에서 옆 길 벽으로 줄을 갈아 끼워 꺾는다")]
+        [Tooltip("켜면 스윙 중 이동 키가 진행 방향에서 크게 벗어날 때 그쪽 벽에 새 줄을 걸고 속력을 유지한 채 방향을 꺾는다.")]
+        [SerializeField] private bool cornerSwing = true;
+        [Tooltip("진행 방향과 입력 방향 사이가 이 각도(°) 이상이면 꺾는다. 아래는 지금처럼 천천히 조종(steer)한다.")]
+        [Range(20f, 120f)][SerializeField] private float cornerTriggerAngle = 50f;
+        [Tooltip("이 각도(°)보다 크면 꺾지 않는다. 뒤로 미는 것은 브레이크(펌프 감속)로 남긴다.")]
+        [Range(90f, 180f)][SerializeField] private float cornerMaxAngle = 135f;
+        [Tooltip("수평 속도가 이보다 느리면(m/s) 꺾지 않는다. 느릴 때는 꺾을 속도가 없어 줄만 바뀌고 멈칫한다.")]
+        [Min(0f)][SerializeField] private float cornerMinSpeed = 10f;
+        [Tooltip("한 번 시도한 뒤 다음 시도까지 기다리는 시간(초). 실패해도 적용해 매 스텝 탐색하지 않는다.")]
+        [Min(0f)][SerializeField] private float cornerCooldown = 0.6f;
+
         [Header("진입 속도 — 붙는 순간 스윙이 바로 살아나게")]
         [Tooltip("공중에서 붙는 순간 진행 방향(접선)으로 보장하는 최소 속도(m/s). 0이면 끈다(순수 물리).\n\n" +
                  "순수 진자는 출발 높이보다 높이 못 올라가고, 일찍 놓을 때마다 조금씩 낮아져 결국 " +
@@ -208,6 +246,12 @@ namespace Momentum.Player
         private Rigidbody _rb;
         private PlayerMovement _movement;
         private bool _swinging;
+        // 추가 생성 — 코너 스윙을 다시 시도할 수 있는 시각 (TryCornerSwing의 쿨다운)
+        private float _nextCornerTime;
+        // 추가 생성 — 이번 스윙의 줄 길이 자동 상한. 제한이 없으면 MaxValue (ApplyAutoRopeLength)
+        private float _autoMaxLength = float.MaxValue;
+        // 추가 생성 — Update에서 스페이스바를 누른 프레임을 기억했다가 다음 FixedUpdate에서 처리한다
+        private bool _jumpRequested;
 
         /// <summary>휠이 바꾸는 값. 실제 길이가 이쪽으로 천천히 따라간다.</summary>
         private float _targetLength;
@@ -319,6 +363,7 @@ namespace Momentum.Player
         private void Update()
         {
             UpdateReelInput();
+            UpdateJumpInput(); // 추가 생성 — 스윙 점프
             UpdateAnimator();
             UpdateVisualRotation();
         }
@@ -332,8 +377,23 @@ namespace Momentum.Player
 
             // 값의 크기가 아니라 부호만 쓴다. 휠 델타는 플랫폼마다 단위가 달라
             // (윈도우는 한 칸에 120) 크기를 그대로 믿으면 다른 기계에서 감기 속도가 달라진다.
+            // 수정 — 휠로 풀 때도 줄 길이 자동 상한(_autoMaxLength)을 넘지 않게 (2026-10-14)
             _targetLength = Mathf.Clamp(_targetLength - Mathf.Sign(input) * lengthPerNotch,
-                                        minRopeLength, _maxLength);
+                                        minRopeLength, Mathf.Min(_maxLength, _autoMaxLength));
+        }
+
+        // 추가 생성 (2026-10-14)
+        /// <summary>
+        /// 스윙 중 스페이스바를 누른 프레임을 기억한다. 실제 점프(속도 변경)는 물리량이라 FixedUpdate에서 한다.
+        /// <c>WasPressedThisFrame</c>은 프레임 단위 판정이라 휠과 같은 이유로 Update에서 읽는다
+        /// (FixedUpdate는 한 프레임에 여러 번 또는 0번 돌아 누름을 놓치거나 두 번 센다).
+        /// </summary>
+        private void UpdateJumpInput()
+        {
+            if (!_swinging || !swingJump) return;
+            InputActionReference action = jumpAction != null ? jumpAction
+                                        : _movement != null ? _movement.JumpAction : null;
+            if (action != null && action.action.WasPressedThisFrame()) _jumpRequested = true;
         }
 
         /// <summary>
@@ -531,6 +591,17 @@ namespace Momentum.Player
             // 것이지 스윙을 돕는 것이 아니다. gun.IsPropAnchor를 확인.
             bool attached = gun != null && gun.IsAttached && !gun.IsPropAnchor;
 
+            // 추가 생성 — 스윙 점프. 이번 스텝은 놓는 것으로 끝나므로 아래 구속은 풀지 않는다.
+            if (_jumpRequested)
+            {
+                _jumpRequested = false;
+                if (attached && _swinging)
+                {
+                    DoSwingJump();
+                    return;
+                }
+            }
+
             if (attached && !_swinging) BeginSwing();
             else if (!attached && _swinging) EndSwing();
 
@@ -542,6 +613,9 @@ namespace Momentum.Player
             // 진자가 성립하지 않았다. 상태를 나눠 갖는 대신 <b>원하는 쪽이 계속 주장한다</b>로
             // 바꾸면, 누가 언제 끄든 다음 스텝에 저절로 회복된다.
             if (_movement != null) _movement.SuspendHorizontalControl = true;
+
+            // 추가 생성 — 교차로에서 꺾기. 앵커가 바뀔 수 있으므로 아래에서 앵커를 읽기 전에 한다.
+            TryCornerSwing();
 
             Vector3 anchor = gun.AnchorPoint;
             _lastAnchor = anchor; // 추가 생성 — EndSwing의 높이 상한이 쓴다
@@ -630,6 +704,38 @@ namespace Momentum.Player
             // 계속 돌고 있어서, 매번 SwingLoop부터 다시 시작한다는 보장이 없다 — 트리거로
             // "지금 막 붙었다"를 알려야 StartSwing 클립(있다면)이 확실히 재생된다.
             _animator?.SetTrigger(SwingStartedHash);
+
+            // 추가 생성 — 아치 최저점이 땅에 끌리지 않게 줄 길이 상한을 잰다 (코너 스윙으로 다시 붙을 때도 여기를 지난다).
+            ApplyAutoRopeLength();
+        }
+
+        // 추가 생성 (2026-10-14)
+        /// <summary>
+        /// 줄 길이 자동 — 앵커 바로 아래 땅(또는 아래 건물 선반)까지 높이를 재서, 진자 최저점이
+        /// 그보다 <see cref="autoBottomClearance"/> 위에 오도록 줄 길이 상한을 정한다.
+        ///
+        /// 붙는 순간의 길이는 "지금 떨어진 거리"라서(위 주석) 낮은 데서 먼 앵커에 붙으면 최저점이
+        /// 땅 밑이 된다. 그걸 피하려고 플레이어가 휠로 직접 감아야 했던 것이 컨트롤이 어려운 큰 이유였다.
+        /// 스파이더맨처럼 R과 방향키만으로 스윙이 이어지게, 그 감기를 게임이 대신 한다.
+        ///
+        /// 길이를 즉시 바꾸지 않고 목표만 줄이는 이유: 실제 길이는 FixedUpdate에서 reelSpeed로 따라가므로
+        /// 몸이 튀지 않고 감기는 것으로 보인다. 감을 때 붙는 속도는 maxSpeed가 막는다.
+        /// </summary>
+        private void ApplyAutoRopeLength()
+        {
+            _autoMaxLength = float.MaxValue;
+            if (!autoRopeLength || gun == null) return;
+
+            Vector3 anchor = gun.AnchorPoint;
+            // 땅(Ground)과 건물(Anchorable) 둘 다 본다 — 아래층 셋백 선반에 걸려도 최저점이 막히기 때문이다.
+            int mask = gun.AnchorMask | LayerMask.GetMask(Level.CityGenerator.GroundLayerName);
+            if (!Physics.Raycast(anchor, Vector3.down, out RaycastHit below, autoProbeDistance, mask,
+                                 QueryTriggerInteraction.Ignore))
+                return; // 아래가 비어 있으면(강 위 등) 제한하지 않는다
+
+            _autoMaxLength = Mathf.Max(minRopeLength, anchor.y - below.point.y - autoBottomClearance);
+            // 지금보다 짧아야 하면 목표만 줄인다 — 실제 길이는 FixedUpdate에서 감기 속도로 따라간다.
+            _targetLength = Mathf.Min(_targetLength, _autoMaxLength);
         }
 
         // 추가 생성
@@ -714,7 +820,41 @@ namespace Momentum.Player
         /// 상향 임펄스를 얹을지. 컴포넌트가 꺼져서 정리되는 경우(<c>OnDisable</c>)에는
         /// 플레이어가 놓은 것이 아니므로 보상을 주지 않는다.
         /// </param>
-        private void EndSwing(bool boost = true)
+        // 추가 생성 (2026-10-14)
+        /// <summary>
+        /// 스윙 점프 — 줄을 놓으면서 기존 놓기 보정 위에 점프 보너스를 얹는다.
+        ///
+        /// 타이밍 판정: 줄이 수직에서 진행 방향 <b>앞쪽으로</b> <see cref="goodJumpWindow"/>만큼 지나갔고
+        /// 몸이 <b>올라가는 중</b>이면 "좋은 점프". 아치가 올라가는 끝에서 놓을수록 멀리 가는 진자의 성질을
+        /// 그대로 보상으로 키운 것이다. 그 밖에서 눌러도 작은 보너스는 준다 — 입력이 헛돌지 않게.
+        ///
+        /// 놓은 뒤에는 R을 다시 눌러야 다음 줄이 붙는다(GrappleGun.ReleaseByJump). R을 쥔 채라 재시도
+        /// 루프가 바로 다시 붙이면 점프가 0.12초 만에 끊겨 "놓고 → 날고 → 다시 쏜다" 리듬이 안 나온다.
+        /// </summary>
+        private void DoSwingJump()
+        {
+            Vector3 fromAnchor = _rb.position - gun.AnchorPoint;
+            Vector3 velocity = _rb.linearVelocity;
+
+            // 줄이 수직(앵커 바로 아래)에서 벌어진 각도
+            float pastVertical = Vector3.Angle(fromAnchor, Vector3.down);
+            // 몸이 앵커보다 진행 방향 앞쪽에 있는가 (수평 성분끼리 비교) — 뒤쪽이면 아치의 내려오는 쪽이다
+            bool ahead = Vector3.Dot(Vector3.ProjectOnPlane(fromAnchor, Vector3.up),
+                                     Vector3.ProjectOnPlane(velocity, Vector3.up)) > 0f;
+            bool good = ahead && velocity.y > 0f &&
+                        pastVertical >= goodJumpWindow.x && pastVertical <= goodJumpWindow.y;
+
+            EndSwing(true, jumpExtraApex, good ? goodJumpBonus : plainJumpBonus);
+            gun.ReleaseByJump();
+
+            if (_movement != null && _movement.LogLift)
+                Debug.Log($"[띄움] 스윙 점프 — {(good ? "좋은 타이밍" : "보통")}, 줄 각도 {pastVertical:F0}°", this);
+        }
+
+        // 수정 (2026-10-14) — 스윙 점프용 인자 두 개 추가. 기본값이면 예전과 똑같이 동작한다.
+        /// <param name="extraApex">놓기 높이 상한을 이만큼 더 풀어 준다(m). 스윙 점프만 쓴다.</param>
+        /// <param name="jumpBonus">놓기 보정 위에 더할 (x = 진행 방향 앞, y = 위) 속도(m/s).</param>
+        private void EndSwing(bool boost = true, float extraApex = 0f, Vector2 jumpBonus = default)
         {
             _swinging = false;
             RopeLength = 0f;
@@ -771,8 +911,17 @@ namespace Momentum.Player
                 }
             }
 
+            // 추가 생성 (2026-10-14) — 스윙 점프 보너스. 앞은 수평 진행 방향으로, 위는 y로 얹는다.
+            if (jumpBonus != Vector2.zero)
+            {
+                Vector3 flat = new Vector3(velocity.x, 0f, velocity.z);
+                if (flat.sqrMagnitude > 0.0001f) velocity += flat.normalized * jumpBonus.x;
+                velocity.y += jumpBonus.y;
+            }
+
             // 추가 생성 — 정점이 앵커 높이를 넘지 않게 자른다(LimitReleaseApex 주석 참고).
-            velocity = LimitReleaseApex(velocity);
+            // 수정 (2026-10-14) — 스윙 점프면 extraApex만큼 더 높이 허락한다.
+            velocity = LimitReleaseApex(velocity, extraApex);
 
             // 감기 증폭과 겹쳐 상한을 넘지 않게 한다 — maxSpeed는 설계값이 아니라 안전장치다.
             _rb.linearVelocity = Vector3.ClampMagnitude(velocity, maxSpeed);
@@ -796,7 +945,8 @@ namespace Momentum.Player
         /// 유니티 내장 <c>Rigidbody.maxLinearVelocity</c>는 방향 구분 없이 전체 속력만 자르므로
         /// "위로만" 자르는 이 일에는 쓸 수 없어 직접 계산한다.
         /// </summary>
-        private Vector3 LimitReleaseApex(Vector3 velocity)
+        // 수정 (2026-10-14) — extraApex: 스윙 점프일 때 상한을 더 풀어 주는 높이(m). 기본 0이면 예전 그대로.
+        private Vector3 LimitReleaseApex(Vector3 velocity, float extraApex = 0f)
         {
             if (releaseApexAboveAnchor < 0f || velocity.y <= 0f) return velocity;
 
@@ -804,7 +954,7 @@ namespace Momentum.Player
             if (g <= 0f) return velocity;
 
             // 아직 더 올라가도 되는 높이. 이미 앵커보다 위면 0 → 위 속도를 전부 자른다.
-            float room = _lastAnchor.y + releaseApexAboveAnchor - _rb.position.y;
+            float room = _lastAnchor.y + releaseApexAboveAnchor + extraApex - _rb.position.y;
             float maxUp = room > 0f ? Mathf.Sqrt(2f * g * room) : 0f;
             if (velocity.y <= maxUp) return velocity;
 
@@ -939,6 +1089,52 @@ namespace Momentum.Player
 
             Vector3 accel = alongPush * pumpAcceleration + steerPush * steerAcceleration;
             _rb.linearVelocity = Vector3.ClampMagnitude(velocity + accel * Time.fixedDeltaTime, maxSpeed);
+        }
+
+        // 추가 생성 (2026-10-14)
+        /// <summary>
+        /// 코너 스윙. 이동 키가 진행 방향에서 <see cref="cornerTriggerAngle"/>~<see cref="cornerMaxAngle"/>만큼
+        /// 벗어나면 그쪽 벽에 줄을 갈아 끼우고, <b>속력은 그대로 두고 방향만</b> 꺾는다.
+        ///
+        /// 순수 진자로는 직각 교차로를 돌 수 없다. 스윙 평면을 조금씩 돌리는 조종(steer)은 넓은 커브용이고,
+        /// 도시는 격자라 꺾는 순간이 대부분 90°다. 스파이더맨이 모서리에서 줄을 새로 걸어 휙 도는 것처럼,
+        /// 여기서도 새 앵커가 꺾는 힘의 근거가 된다 — 줄이 없는데 방향만 바꾸면 공중에서 꺾이는 거짓말이 된다.
+        ///
+        /// 속력을 유지하는 이유: README의 "지킨다" 축. 방향 전환이 속도를 깎으면 꺾을 때마다 흐름이 끊긴다.
+        /// </summary>
+        private void TryCornerSwing()
+        {
+            if (!cornerSwing || moveAction == null || _movement == null || gun == null) return;
+            if (Time.time < _nextCornerTime) return;
+
+            Vector2 input = moveAction.action.ReadValue<Vector2>();
+            if (input.sqrMagnitude < 0.25f) return; // 키를 확실히 눌렀을 때만 (패드 스틱 반쯤 이상)
+
+            Vector3 want = Vector3.ProjectOnPlane(_movement.CameraRelativeDirection(input), Vector3.up);
+            Vector3 velocity = _rb.linearVelocity;
+            Vector3 flat = Vector3.ProjectOnPlane(velocity, Vector3.up);
+            if (flat.magnitude < cornerMinSpeed || want.sqrMagnitude < 0.0001f) return;
+
+            float angle = Vector3.Angle(flat, want);
+            if (angle < cornerTriggerAngle || angle > cornerMaxAngle) return; // 살짝 틀기·브레이크는 제외
+
+            // 성공·실패와 상관없이 쿨다운을 건다. 붙을 벽이 없는 동안 매 스텝 레이를 쏘지 않게.
+            _nextCornerTime = Time.time + cornerCooldown;
+            if (!gun.TryCornerReattach(want.normalized)) return;
+
+            float speed = velocity.magnitude;
+
+            // 새 앵커 기준으로 줄 길이·몸 방향을 다시 잡는다(붙는 순간과 같은 처리, 애니메이션 트리거 포함).
+            BeginSwing();
+
+            // 수평 속도를 원하는 방향으로 돌리고(높이 성분은 유지), 새 줄의 접선면에 눕혀 같은 속력으로 맞춘다.
+            // 접선면에 눕히는 이유: 줄 방향 성분은 다음 SolveRope가 지워 버려 속력이 그만큼 사라진다.
+            Vector3 turned = want.normalized * flat.magnitude + Vector3.up * velocity.y;
+            Vector3 toAnchor = gun.AnchorPoint - _rb.position;
+            if (toAnchor.sqrMagnitude < 0.0001f) return;
+            Vector3 tangent = Vector3.ProjectOnPlane(turned, toAnchor.normalized);
+            if (tangent.sqrMagnitude > 0.0001f)
+                _rb.linearVelocity = Vector3.ClampMagnitude(tangent.normalized * speed, maxSpeed);
         }
 
         // 추가 생성

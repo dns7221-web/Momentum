@@ -848,6 +848,39 @@ namespace Momentum.Player
             _nextRetryTime = Time.time + retryInterval;
         }
 
+        // 추가 생성 (2026-10-14)
+        /// <summary>
+        /// 코너 스윙 — 붙은 채로 앵커만 <paramref name="direction"/> 쪽 벽으로 갈아 끼운다.
+        ///
+        /// <see cref="Detach"/>를 거치지 않는 것이 핵심이다. 놓았다 다시 붙이면 그 사이 한 스텝 동안
+        /// 스윙이 끝나(EndSwing) 릴리즈 보정이 들어가고 줄도 깜빡인다. 여기서는 부착 상태가 끊기지 않고
+        /// 앵커 위치만 바뀌며, 줄 길이와 속도 방향은 <c>SwingConstraint</c>가 바로 다시 맞춘다.
+        /// 새 줄을 쏘는 것이므로 발사 애니메이션은 다시 튕긴다.
+        /// </summary>
+        /// <returns>그쪽에 붙을 벽이 없거나 스윙 중이 아니면 false (아무것도 바꾸지 않는다).</returns>
+        public bool TryCornerReattach(Vector3 direction)
+        {
+            if (!IsAttached || IsPropAnchor || autoAnchor == null) return false;
+            if (!autoAnchor.TryFindToward(direction, anchorMask, maxRange, out RaycastHit hit)) return false;
+
+            _anchorTransform = hit.collider.transform;
+            _anchorLocalPoint = _anchorTransform.InverseTransformPoint(hit.point);
+            AnchorBody = hit.collider.attachedRigidbody;
+            FireAnimation();
+            return true;
+        }
+
+        // 추가 생성 (2026-10-14)
+        /// <summary>
+        /// 스윙 점프로 놓는다. <see cref="ForceDetach"/>와 달리 "쥐고 있음"까지 지워서, R을 쥔 채라도
+        /// 재시도 루프(<see cref="Update"/>)가 곧바로 다시 붙이지 않게 한다. 다음 줄은 R을 다시 누르면 붙는다.
+        /// </summary>
+        public void ReleaseByJump()
+        {
+            _holding = false;
+            if (IsAttached) Detach();
+        }
+
         /// <summary>붙은 것을 놓는다. 속도에는 손대지 않는다 — 관성이 곧 보상이다.</summary>
         private void Detach()
         {

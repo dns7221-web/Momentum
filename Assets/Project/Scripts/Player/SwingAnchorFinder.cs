@@ -150,6 +150,35 @@ namespace Momentum.Player
                 forward = (along.normalized + outward * frontWallPushOut).normalized;
             }
 
+            // 수정 — 2)~6) 단계를 SearchAlong으로 뺐다. 코너 스윙(TryFindToward)이 같은 탐색을 쓴다.
+            return SearchAlong(pos, forward, anchorMask, maxRange, out hit);
+        }
+
+        // 추가 생성 (2026-10-14)
+        /// <summary>
+        /// 코너 스윙용 탐색. 진행 방향이 아니라 <paramref name="direction"/>(플레이어가 꺾고 싶은 쪽)
+        /// 앞·위에서 옆 벽을 찾는다. 교차로에서 옆 길로 꺾을 때 그 길의 벽에 줄을 걸기 위해서다.
+        /// 앞 벽 눕히기(frontWallCheck)는 하지 않는다 — 방향을 플레이어가 직접 정했기 때문이다.
+        /// </summary>
+        public bool TryFindToward(Vector3 direction, LayerMask anchorMask, float maxRange, out RaycastHit hit)
+        {
+            hit = default;
+            _lastFound = false;
+            if (body == null) return false;
+
+            Vector3 forward = Vector3.ProjectOnPlane(direction, Vector3.up);
+            if (forward.sqrMagnitude < 0.0001f) return false;
+            return SearchAlong(body.position, forward.normalized, anchorMask, maxRange, out hit);
+        }
+
+        // 추가 생성 — TryFind의 2)~6) 단계를 그대로 옮긴 탐색 본체.
+        /// <summary>
+        /// <paramref name="forward"/>(수평, 정규화됨) 앞·위 이상점에서 좌우 벽을 찾아 앵커를 고른다.
+        /// </summary>
+        private bool SearchAlong(Vector3 pos, Vector3 forward, LayerMask anchorMask, float maxRange, out RaycastHit hit)
+        {
+            hit = default;
+
             // 진행 방향의 오른쪽. Cross(위, 앞) = 오른쪽 (유니티는 왼손 좌표계).
             Vector3 right = Vector3.Cross(Vector3.up, forward);
 
