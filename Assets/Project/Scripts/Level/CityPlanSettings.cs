@@ -365,6 +365,10 @@ namespace Momentum.Level
         [Tooltip("애비뉴 양옆에 덧대는 인도 (Sidewalk_NoCurb_3m 권장 — 연석 방향을 신경 쓸 필요가 없다).")]
         public GameObject sidewalkStripPrefab;
         [Min(0.1f)] public float sidewalkStripWidth = 3f;
+        // 추가 생성 — V5 넓은 인도 (2026-10-15)
+        [Tooltip("애비뉴 한쪽에 인도 띠를 몇 줄 이어 깔지. 1이면 V4(차도 18 + 인도 3 × 2 = 24 m), " +
+                 "2면 V5(차도 18 + 인도 6 × 2 = 30 m). 애비뉴 폭 = 차도 + 인도 폭 × 이 값 × 2 가 되게 맞춘다.")]
+        [Min(1)] public int sidewalkStripsPerSide = 1;
         [Tooltip("스트리트 차도 (Street_2Lane).")]
         public GameObject streetRoadPrefab;
         [Tooltip("애비뉴 × 스트리트 교차로 (Street_Asphalt_6x6).")]
