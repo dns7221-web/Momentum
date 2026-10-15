@@ -97,7 +97,29 @@ namespace Momentum.Player
                  "이 값이 더 작으면 다 못 되돌려 몸이 입력 쪽으로 서서히 돌아간다.")]
         [Min(0f)][SerializeField] private float aimTurnDegPerSec = 720f;
 
-        [Header("발사 — 꼭짓점을 옥상 너머에 둔다")]
+        // 추가 생성 — 발사 방식 (2026-10-15)
+        /// <summary>슬링샷을 놓았을 때 어디로 보낼지.</summary>
+        public enum LaunchMode
+        {
+            /// <summary>마블 스파이더맨 2의 슬링샷 런치처럼 카메라가 보는 앞쪽 공중으로 쭉 튕겨 나간다(기본).</summary>
+            Forward,
+            /// <summary>예전 방식 — 줄을 건 건물의 옥상 위에 꼭짓점이 오게 올라간다.</summary>
+            RoofClimb,
+        }
+
+        // 수정 (2026-10-15) — 방식을 설정 하나로 고르지 않고 키로 나눈다: 우클릭 = 옥상 오르기(예전 그대로), F = 앞으로 대시.
+        [Header("발사 방식 — 우클릭은 옥상 오르기, F는 앞으로 대시")]
+        [Tooltip("앞으로 대시(마블 스파이더맨 2의 슬링샷 런치) 입력. 누르고 있는 동안 충전, 떼면 발사. " +
+                 "비워두면 F 키로 실행 중에 만든다(InputSystem_Actions 파일은 건드리지 않는다).")]
+        [SerializeField] private InputActionReference forwardAction = null;
+        [Tooltip("Forward 발사의 최소 위 각도(°). 카메라가 아래를 봐도 이만큼은 띄워서 땅에 꽂히지 않게 한다.")]
+        [Range(0f, 45f)][SerializeField] private float minLaunchPitch = 10f;
+        [Tooltip("Forward 발사의 최대 위 각도(°). 카메라가 하늘을 봐도 이 이상은 안 솟는다 — 앞으로 나가는 대시라서.")]
+        [Range(10f, 80f)][SerializeField] private float maxLaunchPitch = 35f;
+        [Tooltip("발사 방향 기준 카메라. 비워두면 Camera.main.")]
+        [SerializeField] private Transform aimCamera = null;
+
+        [Header("발사 — 꼭짓점을 옥상 너머에 둔다 (RoofClimb)")]
         [Tooltip("옥상 모서리에서 건물 안쪽으로 얼마나 들어간 지점에 꼭짓점을 둘지(m). " +
                  "0이면 모서리 난간에 걸리고, 너무 크면 얕은 옥상을 넘어 반대편 길로 떨어진다.")]
         [Min(0f)][SerializeField] private float landingInset = 3f;
@@ -113,6 +135,19 @@ namespace Momentum.Player
         [Tooltip("Slingshot 레이어 가중치가 오르내리는 속도(초당). 8이면 0↔1에 0.125초. " +
                  "0이면 즉시 바뀐다 — 자세가 한 프레임에 갈아 끼워져 튄다(AnimatorLayerFade 참고).")]
         [Min(0f)][SerializeField] private float animLayerLerpSpeed = AnimatorLayerFade.DefaultSpeed;
+
+        // 추가 생성 — 휠 한 칸 = 한 번 "홱" (2026-10-15)
+        [Header("당김 손맛 — 휠 한 칸마다 몸이 툭 젖혀지고 줄이 떨린다")]
+        [Tooltip("휠 한 칸에 주는 당김 충격(허리 젖힘 속도). 클수록 한 칸이 크게 '홱' 들어간다.")]
+        [Min(0f)][SerializeField] private float yankKick = 3f;
+        [Tooltip("스프링 강도. 클수록 충격이 빨리 제자리로 돌아온다(짧고 단단한 당김).")]
+        [Min(0f)][SerializeField] private float yankStiffness = 220f;
+        [Tooltip("스프링 감쇠. 작으면 젖힘이 몇 번 출렁이고, 크면 한 번에 멈춘다.")]
+        [Min(0f)][SerializeField] private float yankDamping = 18f;
+        [Tooltip("충격으로 더해지는 젖힘의 상한(0~1, SlingCharge 단위). 너무 크면 몸이 뒤로 꺾여 보인다.")]
+        [Range(0f, 0.5f)][SerializeField] private float maxYank = 0.2f;
+        [Tooltip("젖힘 충격 1당 줄 가운데가 옆으로 밀리는 거리(m). 충격 최대(maxYank 0.2)일 때 기본 5면 1 m 떨린다. 0이면 줄은 안 떨린다.")]
+        [Min(0f)][SerializeField] private float ropeWobblePerYank = 5f;
 
         /// <summary>줄을 붙이고 조준·충전하는 중인가.</summary>
         public bool IsCharging { get; private set; }
@@ -138,6 +173,18 @@ namespace Momentum.Player
 
         /// <summary>화면에 보이는 충전량. Charge01을 일정 속도로 따라가 허리 젖힘을 부드럽게 만든다.</summary>
         private float _shownCharge;
+
+        // 추가 생성 — 당김 스프링 상태. _yank는 허리 젖힘에 더하는 값, _yankVelocity는 그 변화 속도.
+        private float _yank;
+        private float _yankVelocity;
+
+        // 추가 생성 (2026-10-15) — 앞으로 대시 입력과, 지금 충전이 어느 방식으로 시작됐는지.
+        private InputAction _forwardAction;
+        private bool _ownsForwardAction;   // 실행 중에 직접 만든 액션이면 끌 때 정리한다
+        private LaunchMode _mode = LaunchMode.RoofClimb;
+
+        /// <summary>지금 충전·비행이 앞으로 대시(F)인가. 카메라 연출 등이 읽을 수 있게 공개한다.</summary>
+        public bool IsForwardDash => _mode == LaunchMode.Forward;
 
         // 문자열 비교를 매 프레임 하지 않도록 해시를 한 번만 만든다(Animator.StringToHash).
         // 이름은 PlayerAnimatorBuilder.BuildSlingshotLayer가 만드는 파라미터와 같아야 한다.
@@ -206,6 +253,18 @@ namespace Momentum.Player
             // 충전 구간이므로 두 이벤트가 다 필요하다.
             _action.performed += OnPressed;
             _action.canceled += OnReleased;
+
+            // 추가 생성 (2026-10-15) — 앞으로 대시 키. 칸이 비면 F 키 액션을 실행 중에 만든다(Unity 내장 InputAction 생성자).
+            // 입력 에셋을 고치지 않는 이유: 에셋을 바꾸면 컨트롤 스킴·다른 PC 설정까지 같이 바뀌어 충돌할 수 있다.
+            if (forwardAction != null) _forwardAction = forwardAction.action;
+            else
+            {
+                _forwardAction = new InputAction("SlingshotForward", InputActionType.Button, "<Keyboard>/f");
+                _ownsForwardAction = true;
+            }
+            _forwardAction.Enable();
+            _forwardAction.performed += OnForwardPressed;
+            _forwardAction.canceled += OnForwardReleased;
         }
 
         private void OnDisable()
@@ -219,15 +278,30 @@ namespace Momentum.Player
                 _action = null;
             }
 
+            // 추가 생성 — 앞으로 대시 키 정리. 직접 만든 액션이면 끄고 버린다(남이 쓰는 액션이 아니다).
+            if (_forwardAction != null)
+            {
+                _forwardAction.performed -= OnForwardPressed;
+                _forwardAction.canceled -= OnForwardReleased;
+                if (_ownsForwardAction) { _forwardAction.Disable(); _forwardAction.Dispose(); }
+                _forwardAction = null;
+                _ownsForwardAction = false;
+            }
+
             // 충전·비행 중에 꺼지면 스위치가 켜진 채로 남아 조작이 영영 안 먹는다(견인과 같은 이유).
             if (IsCharging || IsLaunching) EndAll();
         }
 
-        private void OnPressed(InputAction.CallbackContext ctx) => TryBeginCharge();
+        // 수정 (2026-10-15) — 우클릭 = 옥상 오르기, F = 앞으로 대시. 놓기는 시작한 키로만 받는다
+        // (F로 감는 중에 우클릭을 떼도 발사되지 않게).
+        private void OnPressed(InputAction.CallbackContext ctx) => TryBeginCharge(LaunchMode.RoofClimb);
+        private void OnReleased(InputAction.CallbackContext ctx) => ReleaseCharge(LaunchMode.RoofClimb);
+        private void OnForwardPressed(InputAction.CallbackContext ctx) => TryBeginCharge(LaunchMode.Forward);
+        private void OnForwardReleased(InputAction.CallbackContext ctx) => ReleaseCharge(LaunchMode.Forward);
 
-        private void OnReleased(InputAction.CallbackContext ctx)
+        private void ReleaseCharge(LaunchMode mode)
         {
-            if (!IsCharging) return;
+            if (!IsCharging || _mode != mode) return;
 
             // 덜 감았으면 그냥 푼다. 발사는 다음 물리 스텝으로 미룬다 — 속도를 Update
             // 타이밍에 대입하면 그 사이 PlayerMovement의 FixedUpdate가 수평 속도를 다시 덮어쓸 수 있다.
@@ -242,9 +316,10 @@ namespace Momentum.Player
         /// 생 벽면의 진자 검사도 건너뛴다(매달리지 않으므로 의미가 없고, 지상에서는 벽면이
         /// 유일하게 사거리 안에 있는 목표다).
         /// </summary>
-        private void TryBeginCharge()
+        private void TryBeginCharge(LaunchMode mode)
         {
-            if (IsCharging || !CanBegin(out RaycastHit hit)) return;
+            if (IsCharging || !CanBegin(mode, out RaycastHit hit)) return;
+            _mode = mode; // 추가 생성 — 놓을 때 어느 방식으로 쏠지 기억한다
 
             _anchorTransform = hit.collider.transform;
             _anchorLocalPoint = _anchorTransform.InverseTransformPoint(hit.point);
@@ -269,12 +344,13 @@ namespace Momentum.Player
         /// 않다.</b> 그래서 상태(IsCharging)와 판정(CanBegin)을 둘 다 본다 — 슬링샷이 먼저 불렸으면
         /// 이미 충전 중이고, 견인이 먼저 불렸으면 같은 판정을 미리 돌려본다. 어느 순서든 답이 같다.
         /// </summary>
-        public bool ClaimsPress() => isActiveAndEnabled && (IsCharging || CanBegin(out _));
+        public bool ClaimsPress() => isActiveAndEnabled && (IsCharging || CanBegin(LaunchMode.RoofClimb, out _));
 
         /// <summary>
         /// 슬링샷을 시작할 수 있는가 — 발이 땅에 있고, 앵커가 있고, 그 건물 옥상이 충분히 높을 때.
         /// </summary>
-        private bool CanBegin(out RaycastHit hit)
+        // 수정 (2026-10-15) — 어느 방식으로 시작하려는지(mode)를 받는다.
+        private bool CanBegin(LaunchMode mode, out RaycastHit hit)
         {
             hit = default;
             if (IsLaunching || gun == null || gun.IsAttached) return false;
@@ -282,6 +358,9 @@ namespace Momentum.Player
             if (_zip != null && _zip.IsZipping) return false;
 
             if (!gun.TryFindAnchor(out hit, includeProps: false, requireClearHang: false)) return false;
+
+            // 수정 (2026-10-15) — 앞으로 대시(Forward)는 앞에 붙을 벽만 있으면 된다. 옥상 높이 조건은 옥상 오르기에만.
+            if (mode == LaunchMode.Forward) return true;
 
             // 옥상이 별로 안 높으면 견인에게 넘긴다(minRoofRise 설명 참고).
             float roofRise = hit.collider.bounds.max.y - transform.position.y;
@@ -304,9 +383,14 @@ namespace Momentum.Player
                     // 값의 크기가 아니라 부호만 쓴다. 휠 델타는 플랫폼마다 단위가 달라(윈도우는
                     // 한 칸에 120) 크기를 믿으면 기계마다 충전 속도가 달라진다(SwingConstraint와 같은 규칙).
                     // 몸 쪽으로 굴리면(음수) 당긴다 — 시위를 뒤로 당기는 손동작과 방향이 같다.
+                    float before = Charge01; // 추가 생성 — 이번 칸에 실제로 감겼는지 보려고
                     Charge01 = Mathf.Clamp01(Charge01 - Mathf.Sign(input) * chargePerNotch);
+                    // 추가 생성 — 감긴 칸이면 당김 충격을 준다(꽉 찬 뒤 더 굴리거나 푸는 칸은 제외).
+                    if (Charge01 > before) _yankVelocity += yankKick;
                 }
             }
+
+            UpdateYank(); // 추가 생성 — 당김 스프링과 줄 떨림
 
             if (_animator == null || _slingLayerIndex < 0) return;
 
@@ -319,7 +403,34 @@ namespace Momentum.Player
             _shownCharge = chargeVisualSpeed <= 0f
                 ? Charge01
                 : Mathf.MoveTowards(_shownCharge, Charge01, chargeVisualSpeed * Time.deltaTime);
-            _animator.SetFloat(SlingChargeHash, _shownCharge);
+            // 수정 (2026-10-15) — 부드럽게 따라가는 젖힘 위에 당김 충격(_yank)을 얹는다 → 칸마다 툭, 툭 끊어진다.
+            _animator.SetFloat(SlingChargeHash, Mathf.Clamp01(_shownCharge + _yank));
+        }
+
+        // 추가 생성 (2026-10-15)
+        /// <summary>
+        /// 당김 스프링 한 프레임. 휠 한 칸이 속도(<c>_yankVelocity</c>)를 튕기면, 용수철처럼
+        /// 잠깐 더 젖혀졌다가 제자리로 돌아온다(감쇠 진동: a = −k·x − c·v).
+        ///
+        /// 애니메이션 클립을 새로 만들지 않고 기존 허리 젖힘 값(SlingCharge)에 얹는 이유: 무료 클립이 없고,
+        /// "칸마다 끊어지는 당김"은 동작의 모양이 아니라 <b>타이밍</b>이라 값 하나로 충분하다.
+        /// 같은 값으로 줄 가운데를 옆으로 밀어 당길 때마다 줄이 떨리게 한다.
+        /// </summary>
+        private void UpdateYank()
+        {
+            if (!IsCharging)
+            {
+                _yank = 0f;
+                _yankVelocity = 0f;
+                if (gun != null && _ownsRopeOverride) gun.RopeWobble = 0f;
+                return;
+            }
+
+            float dt = Time.deltaTime;
+            _yankVelocity += (-yankStiffness * _yank - yankDamping * _yankVelocity) * dt;
+            _yank = Mathf.Clamp(_yank + _yankVelocity * dt, -maxYank, maxYank);
+
+            if (gun != null) gun.RopeWobble = _yank * ropeWobblePerYank;
         }
 
         private void FixedUpdate()
@@ -388,18 +499,8 @@ namespace Momentum.Player
         /// </summary>
         private void Launch(Vector3 anchor)
         {
-            Vector3 needed = SolveApexVelocity(_rb.position, anchor);
-
-            // 번 속력. v = x·√(k/m)이므로 충전량에 정비례한다.
-            float earned = maxLaunchSpeed * Charge01;
-            float neededSpeed = needed.magnitude;
-
-            // 모자라면 방향은 유지한 채 크기만 줄인다 — 덜 당기면 못 올라가는 것이 정직한 결과다.
-            // 남으면 필요한 만큼만 쓴다. 남는 에너지까지 다 쓰면 꼭짓점이 옥상을 지나쳐
-            // 얕은 건물에서는 반대편 길로 떨어진다 — 이 동작의 목적은 '옥상 복귀'다.
-            Vector3 velocity = neededSpeed > earned && neededSpeed > 0.001f
-                ? needed * (earned / neededSpeed)
-                : needed;
+            // 수정 (2026-10-15) — 발사 속도 계산을 LaunchVelocity로 뺐다(방식별로 갈리고, 기즈모도 같은 식을 쓴다).
+            Vector3 velocity = LaunchVelocity(_rb.position, anchor, out float neededSpeed);
 
             _rb.linearVelocity = velocity;
             _launchDirection = new Vector3(velocity.x, 0f, velocity.z);
@@ -419,6 +520,46 @@ namespace Momentum.Player
 
             EndCharge();
             IsLaunching = true;
+        }
+
+        // 추가 생성 (2026-10-15)
+        /// <summary>
+        /// 놓는 순간의 발사 속도. 번 속력은 두 방식 모두 v = x·√(k/m) → <c>maxLaunchSpeed × 충전량</c>이다.
+        ///
+        /// <b>Forward</b>: 카메라 방향을 위 각도 [minLaunchPitch, maxLaunchPitch]로 눌러 그 방향으로 번 속력을 <b>다</b> 쓴다.
+        /// 목적이 "앞으로 멀리"라 아낄 이유가 없다. 줄은 당기는 대상일 뿐이라 방향을 정하지 않는다.
+        ///
+        /// <b>RoofClimb</b>: 예전 그대로 — 꼭짓점이 옥상 위에 오는 속도를 역산하고, 모자라면 크기만 줄이고
+        /// 남으면 필요한 만큼만 쓴다(남는 에너지까지 쓰면 얕은 건물에서 반대편 길로 떨어진다).
+        /// </summary>
+        /// <param name="neededSpeed">RoofClimb에서 옥상까지 필요한 속력(로그용). Forward는 번 속력과 같다.</param>
+        private Vector3 LaunchVelocity(Vector3 from, Vector3 anchor, out float neededSpeed)
+        {
+            float earned = maxLaunchSpeed * Charge01;
+
+            if (_mode == LaunchMode.Forward)
+            {
+                Transform cam = aimCamera != null ? aimCamera : (Camera.main != null ? Camera.main.transform : transform);
+                Vector3 aim = cam.forward;
+                Vector3 flat = Vector3.ProjectOnPlane(aim, Vector3.up);
+                if (flat.sqrMagnitude < 0.0001f) flat = Vector3.ProjectOnPlane(transform.forward, Vector3.up);
+                flat.Normalize();
+
+                // 카메라의 위 각도(앙각)를 범위 안으로 누른다. 90 − (위 방향과의 사잇각) = 앙각.
+                float pitch = Mathf.Clamp(90f - Vector3.Angle(aim, Vector3.up), minLaunchPitch, maxLaunchPitch);
+                // 수평 앞 방향을 오른쪽 축 기준으로 pitch만큼 들어 올린다. (왼손 좌표계라 위로 들려면 음수 각도)
+                Vector3 right = Vector3.Cross(Vector3.up, flat);
+                Vector3 dir = Quaternion.AngleAxis(-pitch, right) * flat;
+
+                neededSpeed = earned;
+                return dir * earned;
+            }
+
+            Vector3 needed = SolveApexVelocity(from, anchor);
+            neededSpeed = needed.magnitude;
+            return neededSpeed > earned && neededSpeed > 0.001f
+                ? needed * (earned / neededSpeed)
+                : needed;
         }
 
         /// <summary>
@@ -544,6 +685,7 @@ namespace Momentum.Player
         {
             if (!_ownsRopeOverride || gun == null) return;
             gun.OverrideRopeTarget = null;
+            gun.RopeWobble = 0f; // 추가 생성 — 줄 떨림도 같이 끈다
             _ownsRopeOverride = false;
         }
 
@@ -559,14 +701,14 @@ namespace Momentum.Player
 
             Vector3 from = _rb.position;
             Vector3 anchor = AnchorPoint;
-            Vector3 needed = SolveApexVelocity(from, anchor);
-            float earned = maxLaunchSpeed * Charge01;
-            Vector3 v = needed.magnitude > earned && needed.magnitude > 0.001f
-                ? needed * (earned / needed.magnitude)
-                : needed;
+            // 수정 (2026-10-15) — 발사 방식과 같은 식(LaunchVelocity)으로 그린다.
+            Vector3 v = LaunchVelocity(from, anchor, out _);
 
-            Gizmos.color = Color.green;
-            Gizmos.DrawWireSphere(LandingTarget(from, anchor), 0.5f);
+            if (_mode == LaunchMode.RoofClimb)
+            {
+                Gizmos.color = Color.green;
+                Gizmos.DrawWireSphere(LandingTarget(from, anchor), 0.5f);
+            }
 
             // 꼭짓점까지만 그린다 — 그 뒤는 2배 중력이라 이 식이 아니다.
             float g = Mathf.Abs(Physics.gravity.y);

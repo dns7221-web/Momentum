@@ -136,6 +136,19 @@ namespace Momentum.Player
                 hitPoint, Vector3.down * (relativeSpeed * impulseIntensityPerSpeed));
         }
 
+        // 추가 생성 (2026-10-15)
+        /// <summary>
+        /// 충돌이 아닌 연출용 슬로모션. 슬링샷을 끝까지 감은 순간처럼 "멈칫"을 주고 싶을 때 쓴다.
+        /// 소품 충돌 억제(SuppressedBy…)와 쿨다운은 충돌 연쇄를 막으려는 것이라 여기엔 걸지 않는다.
+        /// 내부는 히트스톱과 같은 코루틴을 써서 TimeScale 복원 규칙이 한 곳에 모인다.
+        /// </summary>
+        public void PlaySlowMo(float timeScale, float realDuration) => ExecuteHitStop(timeScale, realDuration);
+
+        // 추가 생성 (2026-10-15)
+        /// <summary>충돌이 아닌 연출용 화면 흔들림. 세기는 임펄스 속도 크기(작게 0.3~1).</summary>
+        public void PlayShake(Vector3 at, float intensity) =>
+            impulseSource.GenerateImpulseAtPositionWithVelocity(at, Vector3.down * intensity);
+
         private void ExecuteHitStop(float targetTimeScale, float realTimeDuration)
         {
             if (_hitStopCoroutine != null)
