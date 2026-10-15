@@ -165,6 +165,9 @@ namespace Momentum.Level
         /// WhiteCity 건물 옥상에 소품을 흩는다. 기존 CityGenerator와 같은 방식으로 레이를 쏴
         /// 실제 밟히는 면을 찾아 앉힌다. 기본은 충돌체 없음 — 착지할 때 발에 걸리지 않게.
         /// </summary>
+        // 추가 생성 — 소품 자리에서 옥상을 못 찾았을 때 다른 자리로 다시 뽑는 횟수 (2026-10-15)
+        private const int PropRetries = 3;
+
         private int CreateRoofProps(Transform parent, int anchorLayer)
         {
             if (whiteCityBuilt.Count == 0 || settings.roofPropPrefabs.Count == 0) return 0;
@@ -195,16 +198,26 @@ namespace Momentum.Level
                 for (int i = 0; i < count; i++)
                 {
                     var spec = specs[Mathf.Min(specs.Count - 1, (int)(rng.Next() * specs.Count))];
-                    var local = new Vector2((float)(rng.Next() * 2.0 - 1.0) * hx, (float)(rng.Next() * 2.0 - 1.0) * hz);
                     float yaw = (float)rng.Next() * 360f;
 
-                    Vector3 origin = building.transform.TransformPoint(
-                        new Vector3(local.x, building.height + RoofProbe.Margin, local.y));
-                    // 수정 — ±Margin 창 대신 건물 높이 전체를 위에서부터 훑는다 (안테나 있는 건물 대응, 2026-10-14)
-                    if (!RoofProbe.TryFindRoofFromTop(origin, building.height + RoofProbe.Margin * 2f, building.transform, anchorMask,
-                                                      out Vector3 spot))
+                    // 수정 (2026-10-15) — 못 찾으면 다른 무작위 자리로 최대 PropRetries번 더 시도한다.
+                    // 진단 결과 WhiteCity 모델 7은 가운데가 평평하지 않고 테두리만 평평해서, 한 번에 가운데를
+                    // 뽑으면 소품이 통째로 빠졌다. 자리를 다시 뽑으면 테두리 쪽 평평한 면에 놓인다.
+                    Vector3 spot = default;
+                    bool foundRoof = false;
+                    for (int attempt = 0; attempt <= PropRetries && !foundRoof; attempt++)
+                    {
+                        var local = new Vector2((float)(rng.Next() * 2.0 - 1.0) * hx, (float)(rng.Next() * 2.0 - 1.0) * hz);
+                        Vector3 origin = building.transform.TransformPoint(
+                            new Vector3(local.x, building.height + RoofProbe.Margin, local.y));
+                        // 수정 — ±Margin 창 대신 건물 높이 전체를 위에서부터 훑는다 (안테나 있는 건물 대응, 2026-10-14)
+                        foundRoof = RoofProbe.TryFindRoofFromTop(origin, building.height + RoofProbe.Margin * 2f,
+                                                                 building.transform, anchorMask, out spot);
+                    }
+                    if (!foundRoof)
                     {
                         missed++;
+                        RecordMiss(_propMiss, building); // 추가 생성 — 진단: 어느 건물에서 못 찾았는지
                         continue;
                     }
 
@@ -276,7 +289,8 @@ namespace Momentum.Level
                 float spacing = Mathf.Max(4f, settings.streetLightSpacing);
                 foreach (var a in avenues)
                 {
-                    float lateral = a.width * 0.5f - settings.sidewalkStripWidth + 0.6f;
+                    // 수정 (2026-10-15) — 인도가 여러 줄이면 그 전체 폭만큼 안쪽(차도 가장자리)에 세운다.
+                    float lateral = a.width * 0.5f - settings.sidewalkStripWidth * Mathf.Max(1, settings.sidewalkStripsPerSide) + 0.6f;
                     foreach (var row in settings.BlockRows())
                     {
                         for (float z = row.x + spacing * 0.5f; z < row.y - 1f; z += spacing)

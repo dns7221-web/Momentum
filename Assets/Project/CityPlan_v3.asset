@@ -13,152 +13,152 @@ MonoBehaviour:
   m_Name: CityPlan_v3
   m_EditorClassIdentifier: Assembly-CSharp::Momentum.Level.CityPlanSettings
   land:
-    x0: -284
-    x1: 284
-    z0: -430
-    z1: 430
-  citySouthZ: -406
-  cityNorthZ: 416
+    x0: -305
+    x1: 305
+    z0: -447
+    z1: 443
+  citySouthZ: -423
+  cityNorthZ: 423
   avenues:
   - id: A0
-    centerX: -252
-    width: 24
+    centerX: -270
+    width: 30
   - id: A1
-    centerX: -168
-    width: 24
+    centerX: -180
+    width: 30
   - id: A2
-    centerX: -84
-    width: 24
+    centerX: -90
+    width: 30
   - id: A3
     centerX: 0
-    width: 24
+    width: 30
   - id: A4
-    centerX: 84
-    width: 24
+    centerX: 90
+    width: 30
   - id: A5
-    centerX: 168
-    width: 24
+    centerX: 180
+    width: 30
   - id: A6
-    centerX: 252
-    width: 24
+    centerX: 270
+    width: 30
   streets:
   - id: S1
-    centerZ: -250
-    width: 12
+    centerZ: -264
+    width: 18
   - id: S2
-    centerZ: -88
-    width: 12
+    centerZ: -96
+    width: 18
   - id: S3
-    centerZ: 74
-    width: 12
+    centerZ: 72
+    width: 18
   - id: S4
-    centerZ: 266
-    width: 12
-  diagonalFrom: {x: 164.9, y: -406}
-  diagonalTo: {x: -84, y: 74}
-  diagonalWidth: 24
+    centerZ: 270
+    width: 18
+  diagonalFrom: {x: 166.7, y: -423}
+  diagonalTo: {x: -90, y: 72}
+  diagonalWidth: 30
   park:
-    x0: -72
-    x1: 72
-    z0: 80
-    z1: 260
+    x0: -75
+    x1: 75
+    z0: 81
+    z1: 261
   plazas:
   - id: P1
-    center: {x: 84, y: -250}
-    radius: 34
+    center: {x: 90, y: -264}
+    radius: 38
   - id: P2
-    center: {x: 0, y: -88}
-    radius: 34
+    center: {x: 0, y: -96}
+    radius: 38
   - id: P3
-    center: {x: -84, y: 74}
-    radius: 34
+    center: {x: -90, y: 72}
+    radius: 38
   westPromenade:
-    x0: -284
-    x1: -264
-    z0: -430
-    z1: 430
+    x0: -305
+    x1: -285
+    z0: -447
+    z1: 443
   southPromenade:
-    x0: -264
-    x1: 264
-    z0: -430
-    z1: -406
+    x0: -285
+    x1: 285
+    z0: -447
+    z1: -423
   landmarks:
   - id: L1
     area:
-      x0: 12
-      x1: 44
-      z0: -348
-      z1: -312
+      x0: 20
+      x1: 52
+      z0: -360
+      z1: -324
     height: 150
   - id: L2
     area:
-      x0: 12
-      x1: 46
-      z0: -22
-      z1: 14
+      x0: 20
+      x1: 54
+      z0: -36
+      z1: 0
     height: 171
   - id: L3
     area:
-      x0: 96
-      x1: 128
-      z0: 152
-      z1: 188
+      x0: 112
+      x1: 144
+      z0: 160
+      z1: 196
     height: 132
   railDeck:
-    x0: 257
-    x1: 263
-    z0: -390
-    z1: 68
+    x0: 275
+    x1: 281
+    z0: -405
+    z1: 65
   railDeckTop: 12
   railDeckThickness: 1.5
   railPillarSpacing: 24
   railPillarSize: 1.2
   water:
-  - x0: -344
-    x1: -284
-    z0: -490
-    z1: 430
-  - x0: -284
-    x1: 284
-    z0: -490
-    z1: -430
+  - x0: -365
+    x1: -305
+    z0: -507
+    z1: 443
+  - x0: -305
+    x1: 305
+    z0: -507
+    z1: -447
   waterSurfaceY: -2
   riverbedY: -3
   piers:
-  - x0: -312
-    x1: -284
-    z0: -334
-    z1: -326
-  - x0: -312
-    x1: -284
-    z0: -154
-    z1: -146
-  - x0: -312
-    x1: -284
-    z0: 106
-    z1: 114
-  - x0: -312
-    x1: -284
-    z0: 226
-    z1: 234
-  - x0: -144
-    x1: -136
-    z0: -458
-    z1: -430
-  - x0: 36
-    x1: 44
-    z0: -458
-    z1: -430
+  - x0: -333
+    x1: -305
+    z0: -349
+    z1: -341
+  - x0: -333
+    x1: -305
+    z0: -163
+    z1: -155
+  - x0: -333
+    x1: -305
+    z0: 113
+    z1: 121
+  - x0: -333
+    x1: -305
+    z0: 238
+    z1: 246
+  - x0: -152
+    x1: -144
+    z0: -475
+    z1: -447
+  - x0: 40
+    x1: 48
+    z0: -475
+    z1: -447
   backdropEast:
-    x0: 264
-    x1: 284
-    z0: -406
-    z1: 416
+    x0: 285
+    x1: 305
+    z0: -423
+    z1: 423
   backdropNorth:
-    x0: -284
-    x1: 284
-    z0: 416
-    z1: 430
+    x0: -305
+    x1: 305
+    z0: 423
+    z1: 443
   backdropSegment: 20
   backdropHeight: {x: 60, y: 120}
   boundaryHeight: 300
@@ -171,26 +171,26 @@ MonoBehaviour:
   lotWidthSmall: 13
   minRemainder: 13
   lotGap: 4
-  diagonalBandOuter: 28
-  diagonalWallOffset: 20
+  diagonalBandOuter: 31
+  diagonalWallOffset: 23
   diagonalWallLength: 18
   diagonalWallDepth: 16
   diagonalWallSpacing: 19
   diagonalWallStart: 10
-  plazaLotClearance: 34
-  plazaDiagonalClearance: 36
+  plazaLotClearance: 38
+  plazaDiagonalClearance: 40
   landmarkDiagonalClearance: 12
   lotSeed: 20261007
   jitterSeed: 4242
   baseHeight: 36
   peaks:
-  - center: {x: 20, y: -320}
+  - center: {x: 22, y: -335}
     amplitude: 56
-    sigma: 85
+    sigma: 92
   - center: {x: -10, y: 0}
     amplitude: 64
-    sigma: 100
-  northZ: 272
+    sigma: 108
+  northZ: 279
   northHeight: 38
   parkEdgeDistance: 40
   parkEdgeBonus: 22
@@ -205,8 +205,9 @@ MonoBehaviour:
   treeSeed: 77
   backdropSeed: 31
   orientationSeed: 911
+  spawnZRange: {x: -423, y: -320}
   gravityScale: 1.5
-  webRange: 22
+  webRange: 32
   largePrefab: {fileID: 2156691396101852631, guid: 5ee3c36b155058447bd827b635d7df02, type: 3}
   mediumPrefab: {fileID: 3872548141855367529, guid: 9825bb854c6e0794d932095fbb022907, type: 3}
   smallPrefab: {fileID: 3486965590206602529, guid: 62e727cc5ca50694dad970423e23f134, type: 3}
@@ -214,7 +215,8 @@ MonoBehaviour:
   avenueRoadPrefab: {fileID: 919132149155446097, guid: 8137567f3fff8784e94181529a29f23e, type: 3}
   sidewalkStripPrefab: {fileID: 919132149155446097, guid: bc6a35bc59493414da9f19c8c0f76c45, type: 3}
   sidewalkStripWidth: 3
-  streetRoadPrefab: {fileID: 919132149155446097, guid: f6c03957104fd3345a8b572c7b44125a, type: 3}
+  sidewalkStripsPerSide: 2
+  streetRoadPrefab: {fileID: 919132149155446097, guid: 8137567f3fff8784e94181529a29f23e, type: 3}
   intersectionPrefab: {fileID: 919132149155446097, guid: ab06e62d938f2194dbb1c916c152d36a, type: 3}
   surfaceColliders: 1
   roofRailPrefab: {fileID: 919132149155446097, guid: 9bd54e536f92a2b4788aad93fb3369fb, type: 3}

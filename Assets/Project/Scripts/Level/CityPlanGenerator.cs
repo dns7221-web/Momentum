@@ -194,8 +194,14 @@ namespace Momentum.Level
             int trees = CreateTrees(root.transform, anchorLayer);
             int backdrop = CreateBackdrop(root.transform, anchorLayer);
             CreateBoundary(root.transform, anchorLayer);
+            _railMiss.Clear(); // 추가 생성 — 진단 기록을 이번 생성 것만 남긴다
+            _propMiss.Clear();
             int rails = CreateFrontageRails(root.transform, built, anchorLayer);
             int roofProps = CreateRoofProps(root.transform, anchorLayer);
+            // 추가 생성 — 진단: 난간·소품이 옥상을 못 찾은 건물을 건물별로 콘솔에 찍는다
+            int diagMask = anchorLayer >= 0 ? (1 << anchorLayer) : ~0;
+            LogMissReport("옥상 난간", _railMiss, diagMask);
+            LogMissReport("옥상 소품", _propMiss, diagMask);
             int streetProps = CreateStreetProps(root.transform, anchorLayer);
             int clutter = CreateClutter(root.transform, layout);
             // 추가 생성 — 도시를 다시 만들 때마다 플레이어가 건물 속에 박히지 않게 시작 옥상으로 옮긴다.
@@ -219,6 +225,50 @@ namespace Momentum.Level
                 Debug.Log($"[CityPlanGenerator] WhiteCity에 맞는 건물이 없어 회색 박스로 남긴 자리 {whiteCityFallback}곳. " +
                           "대부분 봉우리 근처의 아주 높은 필지다. whiteCityMaxStretch를 올리면 줄어든다.", this);
             }
+        }
+
+        // ─── 진단: 옥상을 못 찾은 건물 (2026-10-15) ───
+
+        // 추가 생성 — 건물별로 못 찾은 개수. 생성할 때마다 비운다.
+        private readonly Dictionary<CityBuilding, int> _railMiss = new Dictionary<CityBuilding, int>();
+        private readonly Dictionary<CityBuilding, int> _propMiss = new Dictionary<CityBuilding, int>();
+
+        // 추가 생성
+        /// <summary>못 찾은 횟수를 건물별로 하나 올린다.</summary>
+        private static void RecordMiss(Dictionary<CityBuilding, int> misses, CityBuilding building)
+        {
+            if (building == null) return;
+            misses.TryGetValue(building, out int count);
+            misses[building] = count + 1;
+        }
+
+        // 추가 생성
+        /// <summary>
+        /// 못 찾은 건물을 한 줄씩 찍는다. 원인을 가르려고 <b>건물 중심</b>에서도 옥상을 한 번 찾아본다.
+        /// 중심에서는 찾는데 가장자리에서 못 찾으면 → 건물이 상자 모양이 아니다(바운즈 모서리 위가 허공).
+        /// 중심에서도 못 찾으면 → 꼭대기에 평평한 면이 없다(첨탑·경사 지붕).
+        /// </summary>
+        private void LogMissReport(string what, Dictionary<CityBuilding, int> misses, int anchorMask)
+        {
+            if (misses.Count == 0) return;
+
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"[진단] {what}이(가) 옥상을 못 찾은 건물 {misses.Count}채");
+            foreach (var pair in misses)
+            {
+                CityBuilding b = pair.Key;
+                if (b == null) continue;
+                // WhiteCity·vrbn 건물은 루트 아래 첫 자식이 모델(이름 = 프리팹 이름)이다.
+                string model = b.transform.childCount > 0 ? b.transform.GetChild(0).name : "?";
+                Vector3 origin = b.transform.position + Vector3.up * (b.height + RoofProbe.Margin);
+                bool centerRoof = RoofProbe.TryFindRoofFromTop(origin, b.height + RoofProbe.Margin * 2f,
+                                                               b.transform, anchorMask, out Vector3 roof);
+                string center = centerRoof ? $"중심 옥상 있음(y {roof.y:F1}, 계획 {b.height:F0})" : "중심 옥상 없음";
+                sb.AppendLine($"  {b.name} [{model}] {pair.Value}개 — {center}, " +
+                              $"위치 ({b.transform.position.x:F0}, {b.transform.position.z:F0}), " +
+                              $"바닥 {b.footprint.x:F1} × {b.footprint.y:F1} m");
+            }
+            Debug.Log(sb.ToString(), this);
         }
 
         // ─── 플레이어 시작 위치 ───
@@ -339,7 +389,9 @@ namespace Momentum.Level
 
             bool hasStrip = TryMakeTileSpec(settings.sidewalkStripPrefab, roads.transform,
                                             settings.sidewalkStripWidth, out TileSpec strip);
-            float expectedAvenueRoad = hasStrip ? avenueWidth - strip.cross * 2f : avenueWidth;
+            // 수정 (2026-10-15) — 인도를 한쪽에 여러 줄(sidewalkStripsPerSide) 깔 수 있게 한다. V5 넓은 애비뉴용.
+            int stripsPerSide = Mathf.Max(1, settings.sidewalkStripsPerSide);
+            float expectedAvenueRoad = hasStrip ? avenueWidth - strip.cross * 2f * stripsPerSide : avenueWidth;
             bool hasAvenue = TryMakeTileSpec(settings.avenueRoadPrefab, roads.transform, expectedAvenueRoad, out TileSpec avenue);
             bool hasStreet = TryMakeTileSpec(settings.streetRoadPrefab, roads.transform, streetWidth, out TileSpec street);
 
@@ -354,7 +406,7 @@ namespace Momentum.Level
 
             if (hasAvenue)
             {
-                float total = avenue.cross + (hasStrip ? strip.cross * 2f : 0f);
+                float total = avenue.cross + (hasStrip ? strip.cross * 2f * stripsPerSide : 0f); // 수정 — 여러 줄 인도 포함
                 if (Mathf.Abs(total - avenueWidth) > 0.1f)
                 {
                     Debug.LogWarning($"[CityPlanGenerator] 애비뉴 타일 조합 폭이 {total:F2} m인데 설정 폭은 " +
@@ -412,9 +464,13 @@ namespace Momentum.Level
 
                         if (hasStrip)
                         {
-                            float offset = avenue.cross * 0.5f + strip.cross * 0.5f;
-                            placed += LayRun(strip, from, to, offset, roads.transform, layer, SkipPlaza);
-                            placed += LayRun(strip, from, to, -offset, roads.transform, layer, SkipPlaza);
+                            // 수정 (2026-10-15) — 차도 바깥으로 인도 띠를 stripsPerSide줄 이어 깐다.
+                            for (int k = 0; k < stripsPerSide; k++)
+                            {
+                                float offset = avenue.cross * 0.5f + strip.cross * (k + 0.5f);
+                                placed += LayRun(strip, from, to, offset, roads.transform, layer, SkipPlaza);
+                                placed += LayRun(strip, from, to, -offset, roads.transform, layer, SkipPlaza);
+                            }
                         }
                     }
                 }
@@ -458,7 +514,7 @@ namespace Momentum.Level
                     Vector2 dir = (to - from) / length;
                     Vector2 right = new Vector2(dir.y, -dir.x); // LayRun의 lateral 방향과 같다
                     float half = avenue.cross * 0.5f;
-                    float outer = half + (hasStrip ? strip.cross : 0f);
+                    float outer = half + (hasStrip ? strip.cross * stripsPerSide : 0f); // 수정 — 여러 줄 인도 포함
                     diagonal = new DiagonalRoad { band = new CutStrip(from, dir, right, -outer, outer, 0f, length) };
 
                     // 차도 메움 면은 교차로 아스팔트에서 잰다. 차선 무늬가 없어 월드 좌표로 반복해도 어색하지 않다.
@@ -481,7 +537,6 @@ namespace Momentum.Level
 
                     if (hasStrip)
                     {
-                        float offset = half + strip.cross * 0.5f;
                         for (int k = 0; k < 2; k++)
                         {
                             float sign = k == 0 ? 1f : -1f;
@@ -494,7 +549,12 @@ namespace Momentum.Level
                             };
                             MeasureLane(walk, strip.prefab, new Vector2(strip.bounds.center.x, strip.bounds.center.z),
                                         roads.transform, strip.bounds.max.y);
-                            placed += LayRun(strip, from, to, offset * sign, roads.transform, layer, SkipDiagonal, walk.covered);
+                            // 수정 (2026-10-15) — 사선 대로도 인도 띠를 stripsPerSide줄 이어 깐다. 덮은 구간은 같은 면(walk)에 모은다.
+                            for (int s = 0; s < stripsPerSide; s++)
+                            {
+                                float offset = half + strip.cross * (s + 0.5f);
+                                placed += LayRun(strip, from, to, offset * sign, roads.transform, layer, SkipDiagonal, walk.covered);
+                            }
                             diagonal.lanes.Add(walk);
                         }
                     }
@@ -1402,6 +1462,10 @@ namespace Momentum.Level
             return total;
         }
 
+        // 추가 생성 — 난간 자리에서 옥상을 못 찾았을 때 건물 중심 쪽으로 당겨 다시 쏘는 간격(m)과 횟수 (2026-10-15)
+        private const float RailInsetStep = 1f;
+        private const int RailInsetRetries = 4;
+
         /// <summary>옥상 한 변을 난간 조각으로 채운다. 좌표는 생성기 로컬 XZ.</summary>
         private int PlaceRailRun(Transform parent, BuiltLot b, Bounds rail, float pieceLength, bool longAlongX,
                                  int layer, int anchorMask, Vector2 from, Vector2 to, ref int missed)
@@ -1429,11 +1493,27 @@ namespace Momentum.Level
                 else
                 {
                     // 프리팹 옥상은 파라펫·실외기가 섞여 있어 실제 밟히는 면을 레이로 찾는다.
-                    Vector3 origin = parent.TransformPoint(new Vector3(at.x, b.meta.height + RoofProbe.Margin, at.y));
-                    // 수정 — ±Margin 창 대신 건물 높이 전체를 위에서부터 훑는다 (안테나 있는 건물·계단식 모서리 대응, 2026-10-14)
-                    if (!RoofProbe.TryFindRoofFromTop(origin, b.meta.height + RoofProbe.Margin * 2f, b.meta.transform, anchorMask, out Vector3 spotWorld))
+                    // 수정 (2026-10-15) — 못 찾으면 건물 중심 쪽으로 RailInsetStep씩 최대 RailInsetRetries번 당겨 다시 쏜다.
+                    // 진단 결과 WhiteCity 모델 10은 옆으로 튀어나온 부분 때문에 바운즈 상자가 실제 옥상보다 커서,
+                    // 상자 모서리를 따라 깐 난간 아래가 허공이었다. 안쪽으로 당기면 실제 옥상 가장자리에 붙는다.
+                    Vector2 center = new Vector2(b.meta.transform.localPosition.x, b.meta.transform.localPosition.z);
+                    Vector2 inward = center - at;
+                    inward = inward.sqrMagnitude > 0.0001f ? inward.normalized : Vector2.zero;
+
+                    Vector3 spotWorld = default;
+                    bool foundRoof = false;
+                    for (int attempt = 0; attempt <= RailInsetRetries && !foundRoof; attempt++)
+                    {
+                        Vector2 probe = at + inward * (RailInsetStep * attempt);
+                        Vector3 origin = parent.TransformPoint(new Vector3(probe.x, b.meta.height + RoofProbe.Margin, probe.y));
+                        // 수정 — ±Margin 창 대신 건물 높이 전체를 위에서부터 훑는다 (안테나 있는 건물·계단식 모서리 대응, 2026-10-14)
+                        foundRoof = RoofProbe.TryFindRoofFromTop(origin, b.meta.height + RoofProbe.Margin * 2f,
+                                                                 b.meta.transform, anchorMask, out spotWorld);
+                    }
+                    if (!foundRoof)
                     {
                         missed++;
+                        RecordMiss(_railMiss, b.meta); // 추가 생성 — 진단: 어느 건물에서 못 찾았는지
                         continue;
                     }
                     spotLocal = parent.InverseTransformPoint(spotWorld);
