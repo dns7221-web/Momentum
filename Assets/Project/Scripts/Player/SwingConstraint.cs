@@ -187,6 +187,14 @@ namespace Momentum.Player
         [Min(0f)][SerializeField] private float steerAcceleration = 9f;
 
         // 추가 생성
+        // 추가 생성 — 옆 끌림 보정 (2026-10-15)
+        [Header("옆 끌림 보정 — 옆 벽에 줄이 붙어도 길을 따라 똑바로")]
+        [Tooltip("앵커의 옆 방향 거리를 진자 계산에서 이 비율만큼 지운다. 0 = 순수 물리(벽 쪽으로 휘어 들어감), " +
+                 "1 = 완전히 똑바로. 줄은 언제나 벽에 붙은 점까지 그린다 — 보이는 것과 물리 지지점을 나눈 것이다.")]
+        [Range(0f, 1f)][SerializeField] private float lateralAssist = 0.8f;
+        // 붙는 순간 잰 옆 보정량(월드). PivotPoint = gun.AnchorPoint − 이 값.
+        private Vector3 _pivotOffset;
+
         // 추가 생성 — 스윙 점프 (2026-10-14)
         [Header("스윙 점프 — 스윙 중 스페이스바로 놓으며 더 멀리")]
         [Tooltip("스윙 점프 입력. 비워두면 PlayerMovement의 Jump 액션(스페이스바)을 빌려 쓴다 — GrappleZip과 같은 방식.")]
@@ -617,7 +625,7 @@ namespace Momentum.Player
             // 추가 생성 — 교차로에서 꺾기. 앵커가 바뀔 수 있으므로 아래에서 앵커를 읽기 전에 한다.
             TryCornerSwing();
 
-            Vector3 anchor = gun.AnchorPoint;
+            Vector3 anchor = PivotPoint; // 수정 (2026-10-15) — 물리는 가상 지지점으로 (줄 그림은 벽 점 그대로)
             _lastAnchor = anchor; // 추가 생성 — EndSwing의 높이 상한이 쓴다
 
             // 실제 길이가 목표를 향해 정해진 속도로 따라간다. MoveTowards는 목표를 넘어가지
@@ -673,12 +681,42 @@ namespace Momentum.Player
         /// 일어나지 않고, 반대로 짧게 잡으면 붙자마자 앵커 쪽으로 확 당겨져 튕긴다.
         /// <b>지금 이만큼 떨어져 있다</b>를 그대로 길이로 삼으면 어디에 붙든 즉시 팽팽하다.
         /// </summary>
+        // 추가 생성 (2026-10-15)
+        /// <summary>
+        /// 물리가 쓰는 지지점. 줄 그림은 <c>gun.AnchorPoint</c>(벽에 붙은 점) 그대로이고,
+        /// 진자 계산만 그 점에서 <see cref="_pivotOffset"/>만큼 옆으로 옮긴 이 점을 쓴다.
+        /// </summary>
+        private Vector3 PivotPoint => gun.AnchorPoint - _pivotOffset;
+
+        // 추가 생성 (2026-10-15)
+        /// <summary>
+        /// 옆으로 끌림 보정. 진자는 항상 지지점 바로 아래를 지나가므로, 앵커가 옆 벽에 있으면 앞으로 가면서
+        /// 벽 쪽으로 휘어 들어간다(물리적으로는 맞다). 스파이더맨처럼 줄은 옆 건물에 붙어 보이되 몸은 길을 따라
+        /// 똑바로 가게, 앵커의 <b>옆 방향 성분만</b> lateralAssist 비율만큼 진행선 쪽으로 당긴 가상 지지점을 쓴다.
+        /// 높이와 앞뒤 거리는 그대로라 아치 모양·속도는 같고 옆 끌림만 줄어든다. 붙는 순간마다(코너 스윙 포함) 다시 잰다.
+        /// </summary>
+        private void ComputePivotOffset()
+        {
+            _pivotOffset = Vector3.zero;
+            if (lateralAssist <= 0f || gun == null) return;
+
+            Vector3 heading = Vector3.ProjectOnPlane(_rb.linearVelocity, Vector3.up);
+            if (heading.sqrMagnitude < 1f) heading = Vector3.ProjectOnPlane(transform.forward, Vector3.up); // 거의 멈춰 있으면 몸 앞
+            if (heading.sqrMagnitude < 0.0001f) return;
+            heading.Normalize();
+
+            Vector3 side = Vector3.Cross(Vector3.up, heading); // 진행선의 오른쪽
+            float lateral = Vector3.Dot(gun.AnchorPoint - _rb.position, side); // 앵커가 옆으로 떨어진 거리(부호 포함)
+            _pivotOffset = side * (lateral * lateralAssist);
+        }
+
         private void BeginSwing()
         {
             _swinging = true;
             _swingStartHeight = _rb.position.y;
-            _lastAnchor = gun.AnchorPoint; // 추가 생성 — 붙자마자 놓아도 상한이 맞게
-            RopeLength = Mathf.Max(minRopeLength, Vector3.Distance(_rb.position, gun.AnchorPoint));
+            ComputePivotOffset(); // 추가 생성 (2026-10-15) — 옆 벽 앵커를 진행선 쪽으로 당긴 가상 지지점
+            _lastAnchor = PivotPoint; // 추가 생성 — 붙자마자 놓아도 상한이 맞게 (수정: 가상 지지점 기준)
+            RopeLength = Mathf.Max(minRopeLength, Vector3.Distance(_rb.position, PivotPoint));
 
             // 붙은 길이가 곧 최대 길이다. 그보다 길게 풀 수 있으면 앵커에 붙은 의미가 없어진다.
             _maxLength = RopeLength;
@@ -726,7 +764,7 @@ namespace Momentum.Player
             _autoMaxLength = float.MaxValue;
             if (!autoRopeLength || gun == null) return;
 
-            Vector3 anchor = gun.AnchorPoint;
+            Vector3 anchor = PivotPoint; // 수정 (2026-10-15) — 가상 지지점 아래 땅을 잰다
             // 땅(Ground)과 건물(Anchorable) 둘 다 본다 — 아래층 셋백 선반에 걸려도 최저점이 막히기 때문이다.
             int mask = gun.AnchorMask | LayerMask.GetMask(Level.CityGenerator.GroundLayerName);
             if (!Physics.Raycast(anchor, Vector3.down, out RaycastHit below, autoProbeDistance, mask,
@@ -757,7 +795,7 @@ namespace Momentum.Player
             if (minEntrySpeed <= 0f || gun == null) return;
             if (_movement != null && _movement.IsGrounded) return;
 
-            Vector3 toAnchor = gun.AnchorPoint - _rb.position;
+            Vector3 toAnchor = PivotPoint - _rb.position; // 수정 (2026-10-15) — 가상 지지점
             if (toAnchor.sqrMagnitude < 0.0001f) return;
             Vector3 radial = toAnchor.normalized;
 
@@ -833,7 +871,7 @@ namespace Momentum.Player
         /// </summary>
         private void DoSwingJump()
         {
-            Vector3 fromAnchor = _rb.position - gun.AnchorPoint;
+            Vector3 fromAnchor = _rb.position - PivotPoint; // 수정 (2026-10-15) — 가상 지지점
             Vector3 velocity = _rb.linearVelocity;
 
             // 줄이 수직(앵커 바로 아래)에서 벌어진 각도
@@ -1130,7 +1168,7 @@ namespace Momentum.Player
             // 수평 속도를 원하는 방향으로 돌리고(높이 성분은 유지), 새 줄의 접선면에 눕혀 같은 속력으로 맞춘다.
             // 접선면에 눕히는 이유: 줄 방향 성분은 다음 SolveRope가 지워 버려 속력이 그만큼 사라진다.
             Vector3 turned = want.normalized * flat.magnitude + Vector3.up * velocity.y;
-            Vector3 toAnchor = gun.AnchorPoint - _rb.position;
+            Vector3 toAnchor = PivotPoint - _rb.position; // 수정 (2026-10-15) — 새 앵커의 가상 지지점 기준
             if (toAnchor.sqrMagnitude < 0.0001f) return;
             Vector3 tangent = Vector3.ProjectOnPlane(turned, toAnchor.normalized);
             if (tangent.sqrMagnitude > 0.0001f)

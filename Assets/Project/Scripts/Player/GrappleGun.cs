@@ -206,6 +206,16 @@ namespace Momentum.Player
                  "오브젝트에서 찾고, 없으면 실행 중에 붙인다(그때는 기본값으로 동작하므로 " +
                  "값을 조정하려면 에디터에서 플레이어에 직접 붙여둘 것).")]
         [SerializeField] private SwingAnchorFinder autoAnchor = null;
+        // 추가 생성 — 지상에서 바로 스윙 (2026-10-14)
+        [Tooltip("켜면 땅에서 R을 눌렀을 때 크로스헤어 조준 대신 기존 점프로 살짝 뛴 뒤 공중 자동 앵커로 붙는다. " +
+                 "끄면 예전처럼 땅에서는 크로스헤어로 조준한다.")]
+        [SerializeField] private bool groundSwingStart = true;
+        [Tooltip("땅에서 뛴 뒤 이 시간(초) 동안은 자동 앵커의 '최저점이 땅에 닿으면 버린다' 검사를 건너뛴다. " +
+                 "땅에서 출발하면 모든 앵커가 그 검사에 걸리기 때문이다. 땅에 끌리는 것은 줄 길이 자동이 막는다.")]
+        [Min(0f)][SerializeField] private float groundStartWindow = 0.6f;
+        private float _groundStartUntil;
+        private bool _groundStartFire;
+
         [Tooltip("공중에서 자동 앵커가 실패했을 때 예전 크로스헤어 조준으로 넘어갈지.\n\n" +
                  "끄는 것이 기본이다. 켜면 옥상에서 뛰어내린 직후처럼 위에 벽이 없을 때 " +
                  "크로스헤어가 길 건너 옥상을 맞혀, 진자가 그 벽으로 흔들려 박는 예전 동작이 돌아온다.")]
@@ -285,6 +295,13 @@ namespace Momentum.Player
         /// 순간이 반드시 온다.
         /// </summary>
         public Vector3? OverrideRopeTarget { get; set; }
+
+        // 추가 생성 (2026-10-15)
+        /// <summary>
+        /// 줄 떨림 세기(m). 0보다 크면 직선 대신 가운데를 옆으로 그만큼 밀어 꺾인 줄로 그린다.
+        /// WebSlingshot이 휠 한 칸마다 튕겨서 "당길 때마다 줄이 떨린다"를 보여 준다. 물리와 무관한 그림이다.
+        /// </summary>
+        public float RopeWobble { get; set; }
 
         /// <summary>최저점이 막혔을 때 부착점을 바깥으로 더 밀어보는 횟수와 한 걸음의 크기(m).</summary>
         private const int ClearanceSteps = 3;
@@ -414,6 +431,18 @@ namespace Momentum.Player
         private void OnGrapplePerformed(InputAction.CallbackContext ctx)
         {
             _holding = true;
+
+            // 추가 생성 (2026-10-14) — 지상에서 바로 스윙. 땅이면 붙이지 않고 기존 점프만 요청한다.
+            // 공중에 뜨면 Update의 재시도 루프가 자동 앵커로 붙인다(R을 쥐고 있는 동안).
+            // 발사 애니메이션은 실제로 줄이 나가는 순간(공중)에 맞추려고 여기서는 쏘지 않는다.
+            if (groundSwingStart && autoAnchor != null && _movement != null && _movement.IsGrounded)
+            {
+                _movement.RequestJump();
+                _groundStartUntil = Time.time + groundStartWindow;
+                _groundStartFire = true;
+                return;
+            }
+
             FireAnimation();
             TryAttach();
         }
@@ -437,6 +466,7 @@ namespace Momentum.Player
         private void OnGrappleCanceled(InputAction.CallbackContext ctx)
         {
             _holding = false;
+            _groundStartFire = false; // 추가 생성 — 붙기 전에 R을 떼면 지상 출발 대기도 끝낸다
             Detach();
         }
 
@@ -816,10 +846,25 @@ namespace Momentum.Player
         {
             bool airborne = _movement != null && !_movement.IsGrounded;
 
+            // 추가 생성 (2026-10-14) — 지상에서 바로 스윙을 켰으면 땅에서는 조준으로 붙이지 않고
+            // 점프로 뜰 때까지 기다린다(OnGrapplePerformed 참고).
+            if (!airborne && groundSwingStart && autoAnchor != null)
+            {
+                hit = default;
+                return false;
+            }
+
             if (airborne && autoAnchor != null && aimCamera != null)
             {
-                if (autoAnchor.TryFind(aimCamera.transform.forward, anchorMask, maxRange, out hit))
+                // 수정 (2026-10-14) — 땅에서 막 뛴 직후에는 최저점 검사를 건너뛴다(줄 길이 자동이 대신 막는다).
+                bool groundStart = Time.time < _groundStartUntil;
+                if (autoAnchor.TryFind(aimCamera.transform.forward, anchorMask, maxRange, out hit,
+                                       skipGroundClearance: groundStart))
+                {
+                    // 땅에서 시작한 스윙은 줄이 실제로 나가는 이 순간에 발사 애니메이션을 튕긴다.
+                    if (_groundStartFire) { _groundStartFire = false; FireAnimation(); }
                     return true;
+                }
                 if (!aimFallbackInAir) return false;
             }
 
@@ -938,6 +983,21 @@ namespace Momentum.Player
             if (IsPropAnchor)
             {
                 DrawSaggingRope(muzzle.position, target);
+                return;
+            }
+
+            // 추가 생성 (2026-10-15) — 떨림이 있으면 가운데 점을 줄에 수직(옆·위 섞어)으로 밀어 세 점으로 그린다.
+            if (Mathf.Abs(RopeWobble) > 0.001f)
+            {
+                Vector3 start = muzzle.position;
+                Vector3 along = target - start;
+                Vector3 side = Vector3.Cross(along, Vector3.up);
+                if (side.sqrMagnitude < 0.0001f) side = Vector3.Cross(along, Vector3.right);
+                Vector3 mid = (start + target) * 0.5f + side.normalized * RopeWobble;
+                rope.positionCount = 3;
+                rope.SetPosition(0, start);
+                rope.SetPosition(1, mid);
+                rope.SetPosition(2, target);
                 return;
             }
 
