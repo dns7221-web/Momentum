@@ -74,6 +74,14 @@ namespace Momentum.Player
         [Tooltip("떠오를 때 더할 세로 각도(°). 양수면 내려다봐서 다음 착지 지점이 보인다.")]
         public float risingPitch = 8f;
 
+        // 추가 생성 — 슬링샷 충전 (2026-10-15)
+        [Header("슬링샷 충전 — 감을수록 낮고 뒤로 (당기는 힘을 화면으로)")]
+        [Tooltip("다 감았을 때의 거리 배율(곱). 감은 양(0~1)에 비례해 1에서 이 값으로 간다. 1보다 크면 뒤로 빠진다.")]
+        public float slingChargeDistance = 1.25f;
+
+        [Tooltip("다 감았을 때 더할 세로 각도(°). 음수면 낮아져 올려다보게 된다 — 건물을 향해 버티는 느낌.")]
+        public float slingChargePitch = -6f;
+
         [Header("속도 → 거리 (R4)")]
         [Tooltip("가로: 수평 속도(m/s), 세로: 거리 배율. 빠를수록 멀어진다. FOV는 SpeedFieldOfView가 따로 넓힌다.")]
         public AnimationCurve speedToDistance = AnimationCurve.EaseInOut(0f, 1f, 25f, 1.25f);

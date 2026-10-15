@@ -163,6 +163,9 @@ namespace Momentum.Player
                                   * profile.speedToDistance.Evaluate(flatSpeed)
                                   * Mathf.Lerp(1f, profile.swingBottomDistance, bottom01)
                                   * Mathf.Lerp(1f, profile.risingDistance, rising01);
+            // 추가 생성 (2026-10-15) — 슬링샷을 감는 동안 감은 양만큼 뒤로 빠진다.
+            float slingCharge01 = _slingshot != null && _slingshot.IsCharging ? _slingshot.Charge01 : 0f;
+            distanceScale *= Mathf.Lerp(1f, profile.slingChargeDistance, slingCharge01);
             // SmoothDamp: 목표가 갑자기 바뀌어도 속도를 이어 가며 부드럽게 다가간다(유니티 내장).
             _orbital.Radius = Mathf.SmoothDamp(_orbital.Radius, _baseRadius * distanceScale,
                                                ref _radiusVelocity, profile.distanceSmoothTime, Mathf.Infinity, dt);
@@ -170,7 +173,8 @@ namespace Momentum.Player
             // 4. 세로 각도 = 상황 각도 + 최저점 + 떠오름 + 높이 + 낙하
             float pitch = settings.pitch
                           + profile.swingBottomPitch * bottom01
-                          + profile.risingPitch * rising01;
+                          + profile.risingPitch * rising01
+                          + profile.slingChargePitch * slingCharge01; // 추가 생성 — 감을수록 낮게
             _debugHeight = 0f;
             if (State != CameraState.Ground)
             {
