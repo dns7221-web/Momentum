@@ -37,7 +37,8 @@ namespace Momentum.Player
         [Header("이상점 — 앵커가 몸에 대해 있어야 할 자리")]
         [Tooltip("설계 줄 길이(m). 이상점까지의 거리다. 웹 사거리(22)보다 짧게 둬야 " +
                  "옆 벽까지 비켜 간 실제 앵커가 사거리 안에 남는다.")]
-        [Min(3f)][SerializeField] private float ropeLength = 18f;
+        // 수정 (2026-10-15) — V5 넓은 길(애비뉴 30 m, 웹 사거리 32 m)에 맞춰 18 → 26
+        [Min(3f)][SerializeField] private float ropeLength = 26f;
 
         [Tooltip("먼저 시도할 앙각(°). 높을수록 붙자마자 크게 휘어 나간다. " +
                  "70을 넘기면 GrappleGun의 수직 매달림 문제가 돌아온다.")]
@@ -52,7 +53,8 @@ namespace Momentum.Player
         [Header("벽 찾기")]
         [Tooltip("이상점에서 좌우로 벽을 찾는 거리(m). 24 m 애비뉴 한가운데서도 닿도록 " +
                  "반폭(12) + 여유.")]
-        [Min(1f)][SerializeField] private float sideSearch = 14f;
+        // 수정 (2026-10-15) — V5 30 m 애비뉴 한가운데서도 옆 벽에 닿게 14 → 20
+        [Min(1f)][SerializeField] private float sideSearch = 20f;
 
         [Tooltip("앵커를 벽에서 바깥으로 띄우는 최소 거리(m). 줄이 벽을 긁지 않고 허공에 드리우게 한다.")]
         [Min(0f)][SerializeField] private float wallStandOff = 2f;
@@ -119,7 +121,13 @@ namespace Momentum.Player
         /// <param name="viewForward">수평 속도가 거의 없을 때 쓸 방향. 보통 카메라 정면.</param>
         /// <param name="anchorMask">앵커가 걸리는 레이어(건물). GrappleGun의 값.</param>
         /// <param name="maxRange">웹 사거리. GrappleGun의 maxRange(=CityPlan webRange).</param>
-        public bool TryFind(Vector3 viewForward, LayerMask anchorMask, float maxRange, out RaycastHit hit)
+        /// <param name="skipGroundClearance">
+        /// 수정 (2026-10-14) — true면 "진자 최저점이 땅에 닿는 앵커는 버린다" 검사를 건너뛴다.
+        /// 땅에서 막 뛰어 스윙을 시작할 때만 쓴다 — 그때는 모든 앵커가 이 검사에 걸리기 때문이다.
+        /// 땅에 끌리는 것은 SwingConstraint의 줄 길이 자동이 대신 막는다.
+        /// </param>
+        public bool TryFind(Vector3 viewForward, LayerMask anchorMask, float maxRange, out RaycastHit hit,
+                            bool skipGroundClearance = false)
         {
             hit = default;
             _lastFound = false;
@@ -151,7 +159,7 @@ namespace Momentum.Player
             }
 
             // 수정 — 2)~6) 단계를 SearchAlong으로 뺐다. 코너 스윙(TryFindToward)이 같은 탐색을 쓴다.
-            return SearchAlong(pos, forward, anchorMask, maxRange, out hit);
+            return SearchAlong(pos, forward, anchorMask, maxRange, out hit, skipGroundClearance);
         }
 
         // 추가 생성 (2026-10-14)
@@ -175,7 +183,8 @@ namespace Momentum.Player
         /// <summary>
         /// <paramref name="forward"/>(수평, 정규화됨) 앞·위 이상점에서 좌우 벽을 찾아 앵커를 고른다.
         /// </summary>
-        private bool SearchAlong(Vector3 pos, Vector3 forward, LayerMask anchorMask, float maxRange, out RaycastHit hit)
+        private bool SearchAlong(Vector3 pos, Vector3 forward, LayerMask anchorMask, float maxRange, out RaycastHit hit,
+                                 bool skipGroundClearance = false)
         {
             hit = default;
 
@@ -233,7 +242,9 @@ namespace Momentum.Player
 
                 // 6) 진자 최저점(앵커 바로 아래 rope 지점)과 그 아래 여유에 뭐가 있으면 버린다.
                 //    길이를 rope + 여유로 잡은 레이 한 방이면 "최저점이 비어 있는가"를 알 수 있다.
-                if (Physics.Raycast(anchor, Vector3.down, rope + minGroundClearance,
+                // 수정 (2026-10-14) — 지상 출발이면 건너뛴다 (skipGroundClearance 설명 참고).
+                if (!skipGroundClearance &&
+                    Physics.Raycast(anchor, Vector3.down, rope + minGroundClearance,
                                     clearanceMask, QueryTriggerInteraction.Ignore))
                     continue;
 

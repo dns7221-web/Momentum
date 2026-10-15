@@ -182,6 +182,14 @@ namespace Momentum.Player
         /// </summary>
         public InputActionReference JumpAction => jumpAction;
 
+        // 추가 생성 (2026-10-14)
+        /// <summary>
+        /// 밖에서 기존 점프를 요청한다. 지상에서 R로 스윙을 시작할 때 GrappleGun이 쓴다.
+        /// 점프 속도·애니메이션·접지 처리를 따로 만들지 않고 스페이스바 점프와 같은 길을 타게 한다 —
+        /// 두 벌이면 한쪽만 고쳐지는 일이 생긴다. 공중이면 다음 스텝에 그냥 버려진다(기존 규칙).
+        /// </summary>
+        public void RequestJump() => _jumpRequested = true;
+
         /// <summary>연속으로 공중에 있던 시간. 착지하는 순간 즉시 0으로 되돌아간다.</summary>
         private float _airTime;
 
