@@ -82,6 +82,14 @@ namespace Momentum.Player
         [Tooltip("다 감았을 때 더할 세로 각도(°). 음수면 낮아져 올려다보게 된다 — 건물을 향해 버티는 느낌.")]
         public float slingChargePitch = -6f;
 
+        // 추가 생성 — 카메라 롤 (2026-10-17)
+        [Header("카메라 롤 — 매달린 동안 줄 쪽으로 화면 기울기")]
+        [Tooltip("줄이 완전히 옆을 향할 때의 화면 기울기(°). 8 안팎이 적당하고, 크면 멀미가 난다. 반대쪽으로 기울면 음수로.")]
+        public float swingRollMax = 8f;
+
+        [Tooltip("기울기가 목표를 따라가는 시간(초). 클수록 부드럽고 늦다.")]
+        [Min(0.01f)] public float rollSmoothTime = 0.35f;
+
         [Header("속도 → 거리 (R4)")]
         [Tooltip("가로: 수평 속도(m/s), 세로: 거리 배율. 빠를수록 멀어진다. FOV는 SpeedFieldOfView가 따로 넓힌다.")]
         public AnimationCurve speedToDistance = AnimationCurve.EaseInOut(0f, 1f, 25f, 1.25f);

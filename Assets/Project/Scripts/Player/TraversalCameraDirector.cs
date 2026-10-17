@@ -61,6 +61,10 @@ namespace Momentum.Player
         private Rigidbody _body;
         private PlayerMovement _movement;
         private GrappleGun _gun;
+        // 추가 생성 (2026-10-17) — 카메라 롤: 렌즈 Dutch를 바꿀 카메라와 지금 기울기·그 변화 속도
+        private CinemachineCamera _vcam;
+        private float _roll;
+        private float _rollVelocity;
         private GrappleZip _zip;
         private WebSlingshot _slingshot;
         private CapsuleCollider _capsule; // 추가 생성 — 벽 검사 구의 중심(몸 중심)을 잡는 데 쓴다
@@ -135,6 +139,11 @@ namespace Momentum.Player
             damping.z = _baseHorizontalDamping.y; // 추가 생성
             _orbital.TrackerSettings.PositionDamping = damping;
             _orbital.VerticalAxis.Center = _baseVerticalCenter;
+
+            // 추가 생성 (2026-10-17) — 끌 때 화면 기울기도 수평으로 되돌린다.
+            if (_vcam != null) _vcam.Lens.Dutch = 0f;
+            _roll = 0f;
+            _rollVelocity = 0f;
         }
 
         private void LateUpdate()
@@ -209,6 +218,37 @@ namespace Momentum.Player
             damping.x = Mathf.Lerp(_baseHorizontalDamping.x, Mathf.Max(_baseHorizontalDamping.x, horizontalWall), _debugWall01);
             damping.z = Mathf.Lerp(_baseHorizontalDamping.y, Mathf.Max(_baseHorizontalDamping.y, horizontalWall), _debugWall01);
             _orbital.TrackerSettings.PositionDamping = damping;
+
+            UpdateRoll(dt); // 추가 생성 (2026-10-17) — 7. 스윙 중 줄 쪽으로 화면 기울기
+        }
+
+        // 추가 생성 (2026-10-17)
+        /// <summary>
+        /// 카메라 롤 — 줄에 매달린 동안 화면을 줄 쪽으로 살짝 기울인다(인섬니악 스파이더맨에서 가져온 연출).
+        /// 줄이 화면 오른쪽·왼쪽으로 얼마나 기울었는지(줄 방향 · 카메라 오른쪽 = 내적)에 비례한다.
+        /// Cinemachine 렌즈의 내장 Dutch(화면 회전) 값을 쓰므로 카메라 리그를 새로 만들 필요가 없다.
+        /// 스윙이 아니면 0으로 부드럽게 돌아온다.
+        /// </summary>
+        private void UpdateRoll(float dt)
+        {
+            if (_vcam == null) _vcam = GetComponent<CinemachineCamera>();
+            if (_vcam == null) return;
+
+            float targetRoll = 0f;
+            Camera cam = Camera.main;
+            if (State == CameraState.Swing && _gun != null && cam != null)
+            {
+                Vector3 rope = _gun.AnchorPoint - _body.position;               // 몸 → 줄(보이는 벽 점)
+                if (rope.sqrMagnitude > 0.01f)
+                {
+                    float side = Vector3.Dot(rope.normalized, cam.transform.right); // +면 줄이 화면 오른쪽
+                    targetRoll = -side * profile.swingRollMax;                   // 줄 쪽으로 기울기(반대면 프로필 값을 음수로)
+                }
+            }
+
+            // SmoothDamp: 목표가 바뀌어도 속도를 이어 가며 부드럽게 따라간다(유니티 내장).
+            _roll = Mathf.SmoothDamp(_roll, targetRoll, ref _rollVelocity, profile.rollSmoothTime, Mathf.Infinity, dt);
+            _vcam.Lens.Dutch = _roll;
         }
 
         // 추가 생성
