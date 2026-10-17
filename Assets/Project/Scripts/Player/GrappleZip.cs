@@ -113,6 +113,26 @@ namespace Momentum.Player
                  "0이면 무제한 — 스윙 없이 웹 집만으로 날아다닐 수 있게 된다.")]
         [Min(0)][SerializeField] private int maxAirZips = 2;
 
+        // 추가 생성 — 웹 집 방식 (2026-10-17)
+        /// <summary>공중 웹 집이 줄을 어떻게 쓰는지.</summary>
+        public enum AirZipStyle
+        {
+            /// <summary>줄이 붙는 순간 한 번에 튕겨 나가고 줄은 바로 감겨 사라진다(인섬니악식 반동 대시, 기본).</summary>
+            Yank,
+            /// <summary>예전 방식 — 줄에 매달려 airZipDistance만큼 직선으로 끌려간다(중력 끔).</summary>
+            Tow,
+        }
+
+        [Header("반동 대시 (Yank) — 줄이 번쩍 나갔다 사라지며 그 반동으로 앞으로")]
+        [Tooltip("Yank: 붙는 순간 튕겨 나가고 줄은 사라진다. Tow: 예전처럼 줄을 타고 끌려간다.")]
+        [SerializeField] private AirZipStyle airZipStyle = AirZipStyle.Yank;
+        [Tooltip("튕겨 나가는 최소 속도(m/s). 그 방향으로 이미 더 빠르면 그 속도를 지킨다.")]
+        [Min(0f)][SerializeField] private float yankSpeed = 26f;
+        [Tooltip("튕길 때 위로 얹는 속도(m/s). 대시 뒤 바로 떨어지지 않고 살짝 떠오르게.")]
+        [Min(0f)][SerializeField] private float yankUpSpeed = 4f;
+        [Tooltip("줄이 붙은 점에서 총으로 감겨 들어오는 시간(초). 이 동안만 줄이 보인다.")]
+        [Min(0f)][SerializeField] private float yankRetractTime = 0.1f;
+
         [Header("애니메이션")]
         [Tooltip("Zip 레이어 가중치가 오르내리는 속도(초당). 0이면 즉시 전환된다 — " +
                  "그러면 견인이 끝나는 순간 자세가 뚝 끊겨 튄다.")]
@@ -171,6 +191,9 @@ namespace Momentum.Player
         private Vector3 _zipWallNormal;
         /// <summary>이번 공중 구간에서 쓴 웹 집 횟수.</summary>
         private int _airZipsUsed;
+        // 추가 생성 — 반동 대시 줄 회수 단계 (2026-10-17)
+        private bool _retracting;
+        private float _retractElapsed;
 
         private Vector3 TargetPoint =>
             _targetTransform != null
@@ -487,6 +510,32 @@ namespace Momentum.Player
                 if (_movement != null && _movement.LogLift)
                     Debug.Log($"[띄움] 웹 집 — 속도 {_zipSpeed:F1}m/s, 거리 {_zipTravel:F1}m, " +
                               $"남은 횟수 {(maxAirZips > 0 ? maxAirZips - _airZipsUsed : -1)}", this);
+
+                // 추가 생성 (2026-10-17) — 반동 대시(Yank): 끌려가지 않고 줄이 붙는 순간 한 번에 튕겨 나간다.
+                // 그 방향으로 이미 더 빠르면 그 속도를 지키고(carried), 위로 살짝 얹는다. 중력은 바로 켠다 —
+                // 대시 뒤 자연스러운 포물선이 "줄을 당긴 반동"으로 읽힌다. 줄은 아래 회수 단계에서 총으로 감겨 사라진다.
+                if (airZipStyle == AirZipStyle.Yank)
+                {
+                    float speed = Mathf.Max(carried, yankSpeed);
+                    _rb.linearVelocity = _zipDir * speed + Vector3.up * yankUpSpeed;
+                    _rb.useGravity = true;
+                    _retracting = true;
+                    _retractElapsed = 0f;
+                }
+            }
+
+            // 추가 생성 (2026-10-17) — 회수: 줄 끝이 붙은 점에서 총구로 감겨 들어오고, 다 들어오면 끝낸다.
+            if (_retracting)
+            {
+                _retractElapsed += Time.fixedDeltaTime;
+                float r = yankRetractTime <= 0f ? 1f : Mathf.Clamp01(_retractElapsed / yankRetractTime);
+                gun.OverrideRopeTarget = Vector3.Lerp(_airAnchor, MuzzlePosition, r);
+                if (r >= 1f)
+                {
+                    _retracting = false;
+                    Stop(arrived: false);
+                }
+                return;
             }
 
             // 2) 끌려가기 — 줄은 붙은 점에 고정된 채 몸만 직선으로 간다.
@@ -548,6 +597,7 @@ namespace Momentum.Player
         private void Stop(bool arrived)
         {
             IsZipping = false;
+            _retracting = false; // 추가 생성 — 반동 대시 회수 단계도 끝낸다
             if (_airMode) _rb.useGravity = true;   // 수정 — 웹 집 동안 꺼둔 중력을 되살린다
             _airMode = false;       // 추가 생성
             _launched = false;      // 추가 생성
