@@ -349,6 +349,8 @@ namespace Momentum.Player
             // 바로 동작하게 하려는 것이다. 붙이는 순간 그쪽 Awake가 Rigidbody·바닥 마스크를 채운다.
             if (autoAnchor == null) autoAnchor = GetComponent<SwingAnchorFinder>();
             if (autoAnchor == null) autoAnchor = gameObject.AddComponent<SwingAnchorFinder>();
+            // 추가 생성 (2026-10-17) — 다이브(X)도 같은 방식으로 없으면 붙인다. 프리팹에 직접 붙이면 그 값을 쓴다.
+            if (GetComponent<SwingDive>() == null) gameObject.AddComponent<SwingDive>();
             if (animator == null) animator = GetComponentInChildren<Animator>();
             if (visualRoot == null && muzzle != null) visualRoot = muzzle.parent != null ? muzzle.parent.gameObject : null;
 

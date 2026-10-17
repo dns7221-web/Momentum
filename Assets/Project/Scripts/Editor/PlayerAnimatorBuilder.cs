@@ -129,6 +129,10 @@ namespace Momentum.Player.EditorTools
             if (set.zipLoop != null)
                 BuildZipLayer(controller, set);
 
+            // 추가 생성 (2026-10-17) — 다이브 레이어. 가중치는 SwingDive가 넣는다.
+            if (set.diveLoop != null)
+                BuildDiveLayer(controller, set);
+
             if (set.slingAim != null)
                 BuildSlingshotLayer(controller, set);
 
@@ -626,6 +630,27 @@ namespace Momentum.Player.EditorTools
 
             var layers = controller.layers;
             layers[layers.Length - 1] = zipLayer;
+            controller.layers = layers;
+        }
+
+        // 추가 생성 (2026-10-17)
+        /// <summary>
+        /// 다이브 전용 레이어 — Zip 레이어와 같은 구조(상태 하나, Override, 기본 가중치 0).
+        /// 보일지 말지는 <c>SwingDive</c>가 레이어 가중치로 정하므로 전이를 두지 않는다.
+        /// </summary>
+        private static void BuildDiveLayer(AnimatorController controller, PlayerAnimationSet set)
+        {
+            controller.AddLayer("Dive");
+            var diveLayer = controller.layers[controller.layers.Length - 1];
+            diveLayer.defaultWeight = 0f;
+            diveLayer.blendingMode = AnimatorLayerBlendingMode.Override;
+
+            var diveState = diveLayer.stateMachine.AddState("DiveLoop");
+            diveState.motion = set.diveLoop;
+            diveLayer.stateMachine.defaultState = diveState;
+
+            var layers = controller.layers;
+            layers[layers.Length - 1] = diveLayer;
             controller.layers = layers;
         }
 
