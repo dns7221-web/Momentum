@@ -34,6 +34,10 @@ MonoBehaviour:
   risingSpeedForMax: 10
   risingDistance: 1.15
   risingPitch: 8
+  slingChargeDistance: 1.25
+  slingChargePitch: -6
+  swingRollMax: 8
+  rollSmoothTime: 0.35
   speedToDistance:
     serializedVersion: 2
     m_Curve:
@@ -109,3 +113,6 @@ MonoBehaviour:
     m_RotationOrder: 4
   distanceSmoothTime: 0.6
   dampingBlendTime: 0.3
+  wallHorizontalDamping: 0.6
+  wallCheckRadius: 1
+  wallReleaseTime: 0.8
