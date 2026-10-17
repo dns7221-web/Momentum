@@ -75,6 +75,12 @@ namespace Momentum.Player
                  "우클릭인데 스윙 자세가 같이 나오던 원인이 이것이다.")]
         public AnimationClip zipLoop;
 
+        // 추가 생성 (2026-10-17)
+        [Header("다이브 (공중에서 X) — 비우면 다이브 레이어를 만들지 않는다")]
+        [Tooltip("다이브하는 동안 반복할 자세. Mix/Flying(슈퍼히어로 비행 자세)을 추천한다 — " +
+                 "SwingDive가 몸을 앞으로 숙이므로 팔을 앞으로 뻗은 수평 자세가 머리부터 떨어지는 그림이 된다.")]
+        public AnimationClip diveLoop;
+
         [Header("웹 슬링샷 (지상 우클릭 + 휠) — slingAim을 비우면 슬링샷 레이어를 만들지 않는다")]
         [Tooltip("충전 0%: 권총을 양손으로 겨눈 자세. 권총 팩의 W1_Stand_Aim_Idle_IPC.\n\n" +
                  "In-Place(IPC) 버전을 쓴다 — 조준 중엔 WebSlingshot이 몸을 제자리에 세우므로 " +

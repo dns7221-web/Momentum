@@ -195,6 +195,18 @@ namespace Momentum.Player
         // 붙는 순간 잰 옆 보정량(월드). PivotPoint = gun.AnchorPoint − 이 값.
         private Vector3 _pivotOffset;
 
+        // 추가 생성 — 들어온 속도 지키기 (2026-10-17)
+        [Header("들어온 속도 지키기 — 다이브로 번 속도가 스윙에서 잘리지 않게")]
+        [Tooltip("붙는 순간의 속력이 maxSpeed보다 빠르면 그 속력까지 상한을 열고, 초당 이만큼(m/s)씩 maxSpeed로 되돌린다. " +
+                 "작을수록 빠른 스윙이 오래 간다. 0이면 열린 상한이 끝까지 유지된다.")]
+        [Min(0f)][SerializeField] private float speedCapDecay = 5f;
+        // 지금 쓰는 속도 상한. 평소에는 maxSpeed, 빠르게 들어온 스윙에서는 그보다 크다.
+        private float _speedCap;
+        // 추가 생성 — 다이브 컴포넌트(실행 중에 GrappleGun이 붙이므로 처음 쓸 때 찾는다)
+        private SwingDive _dive;
+        /// <summary>속도를 자를 때 쓰는 상한. 0(초기화 전)이면 maxSpeed.</summary>
+        private float SpeedCap => _speedCap > 0f ? _speedCap : maxSpeed;
+
         // 추가 생성 — 스윙 점프 (2026-10-14)
         [Header("스윙 점프 — 스윙 중 스페이스바로 놓으며 더 멀리")]
         [Tooltip("스윙 점프 입력. 비워두면 PlayerMovement의 Jump 액션(스페이스바)을 빌려 쓴다 — GrappleZip과 같은 방식.")]
@@ -611,6 +623,10 @@ namespace Momentum.Player
             }
 
             if (attached && !_swinging) BeginSwing();
+
+            // 추가 생성 (2026-10-17) — 열린 상한을 천천히 평소 값으로 되돌린다(빠른 스윙이 갑자기 끊기지 않게).
+            if (_swinging && speedCapDecay > 0f)
+                _speedCap = Mathf.MoveTowards(SpeedCap, maxSpeed, speedCapDecay * Time.fixedDeltaTime);
             else if (!attached && _swinging) EndSwing();
 
             if (!attached) return;
@@ -714,6 +730,13 @@ namespace Momentum.Player
         {
             _swinging = true;
             _swingStartHeight = _rb.position.y;
+            // 추가 생성 (2026-10-17) — 다이브·웹 집으로 빠르게 들어왔으면 그 속력까지 상한을 연다.
+            // 인섬니악처럼 "다이브로 번 속도로 스윙하면 확 빨라진다"가 되려면 붙는 순간 30 m/s로 잘리면 안 된다.
+            // 수정 (2026-10-17) — 다이브하다 붙었을 때만 연다. 처음엔 모든 스윙에 열어서, 옥상에서 그냥 떨어져
+            // 40~50 m/s로 붙어도 그대로 스윙해 아치가 커지고 벽에 박히며 몸이 휙휙 돌았다(플레이 확인).
+            if (_dive == null) _dive = GetComponent<SwingDive>();
+            bool fromDive = _dive != null && _dive.RecentlyDived;
+            _speedCap = fromDive ? Mathf.Max(maxSpeed, _rb.linearVelocity.magnitude) : maxSpeed;
             ComputePivotOffset(); // 추가 생성 (2026-10-15) — 옆 벽 앵커를 진행선 쪽으로 당긴 가상 지지점
             _lastAnchor = PivotPoint; // 추가 생성 — 붙자마자 놓아도 상한이 맞게 (수정: 가상 지지점 기준)
             RopeLength = Mathf.Max(minRopeLength, Vector3.Distance(_rb.position, PivotPoint));
@@ -814,7 +837,7 @@ namespace Momentum.Player
             // AddForce가 아니라 속도를 바로 쓴다. AddForce는 다음 물리 스텝에야 반영돼서
             // 같은 줄에서 상한(maxSpeed)으로 자를 수가 없기 때문이다.
             _rb.linearVelocity = Vector3.ClampMagnitude(
-                velocity + direction * (minEntrySpeed - along), maxSpeed);
+                velocity + direction * (minEntrySpeed - along), SpeedCap); // 수정 (2026-10-17) — 열린 상한
         }
 
         /// <summary>
@@ -962,7 +985,7 @@ namespace Momentum.Player
             velocity = LimitReleaseApex(velocity, extraApex);
 
             // 감기 증폭과 겹쳐 상한을 넘지 않게 한다 — maxSpeed는 설계값이 아니라 안전장치다.
-            _rb.linearVelocity = Vector3.ClampMagnitude(velocity, maxSpeed);
+            _rb.linearVelocity = Vector3.ClampMagnitude(velocity, SpeedCap); // 수정 (2026-10-17) — 다이브 등으로 열린 상한
         }
 
         // 추가 생성 (2026-10-12, Movie_007)
@@ -1071,7 +1094,7 @@ namespace Momentum.Player
             float reelRate = shrink / Time.fixedDeltaTime;
             if (radial < reelRate) radial = reelRate;
 
-            _rb.linearVelocity = Vector3.ClampMagnitude(tangent + direction * radial, maxSpeed);
+            _rb.linearVelocity = Vector3.ClampMagnitude(tangent + direction * radial, SpeedCap); // 수정 (2026-10-17)
         }
 
         /// <summary>
@@ -1126,7 +1149,7 @@ namespace Momentum.Player
             Vector3 steerPush = tangentPush - alongPush;
 
             Vector3 accel = alongPush * pumpAcceleration + steerPush * steerAcceleration;
-            _rb.linearVelocity = Vector3.ClampMagnitude(velocity + accel * Time.fixedDeltaTime, maxSpeed);
+            _rb.linearVelocity = Vector3.ClampMagnitude(velocity + accel * Time.fixedDeltaTime, SpeedCap); // 수정 (2026-10-17)
         }
 
         // 추가 생성 (2026-10-14)
@@ -1172,7 +1195,7 @@ namespace Momentum.Player
             if (toAnchor.sqrMagnitude < 0.0001f) return;
             Vector3 tangent = Vector3.ProjectOnPlane(turned, toAnchor.normalized);
             if (tangent.sqrMagnitude > 0.0001f)
-                _rb.linearVelocity = Vector3.ClampMagnitude(tangent.normalized * speed, maxSpeed);
+                _rb.linearVelocity = Vector3.ClampMagnitude(tangent.normalized * speed, SpeedCap); // 수정 (2026-10-17)
         }
 
         // 추가 생성
@@ -1188,7 +1211,7 @@ namespace Momentum.Player
         {
             if (swingGravityMultiplier <= 1f) return;
             Vector3 extra = Physics.gravity * ((swingGravityMultiplier - 1f) * Time.fixedDeltaTime);
-            _rb.linearVelocity = Vector3.ClampMagnitude(_rb.linearVelocity + extra, maxSpeed);
+            _rb.linearVelocity = Vector3.ClampMagnitude(_rb.linearVelocity + extra, SpeedCap); // 수정 (2026-10-17)
         }
 
         /// <summary>
