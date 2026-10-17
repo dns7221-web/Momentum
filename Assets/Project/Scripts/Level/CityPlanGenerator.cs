@@ -1800,6 +1800,10 @@ namespace Momentum.Level
         /// <summary>Rigidbody가 있는 오브젝트는 건너뛴다 (정적 배칭과 물리 위치가 어긋나는 문제 — 기존과 같은 규칙).</summary>
         private static void MarkStaticRecursive(GameObject go)
         {
+            // 추가 생성 (2026-10-17) — 공원 나무는 Static에서 뺀다. Realistic Tree 잎은 나무 자신의 좌표로 흔드는
+            // 바람 셰이더인데, 정적 배칭이 메시를 월드 좌표로 합쳐 버리면 원점에서 먼 나무일수록 크게 휘어 잎이
+            // 옆 지역까지 튀어 보였다. 나무 묶음과 그 아래 전부 건너뛴다.
+            if (go.name == "_Trees") return;
             if (go.GetComponent<Rigidbody>() == null) go.isStatic = true;
             foreach (Transform child in go.transform) MarkStaticRecursive(child.gameObject);
         }
