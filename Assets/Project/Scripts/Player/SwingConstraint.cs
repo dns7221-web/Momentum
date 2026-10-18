@@ -623,11 +623,13 @@ namespace Momentum.Player
             }
 
             if (attached && !_swinging) BeginSwing();
+            else if (!attached && _swinging) EndSwing();
 
             // 추가 생성 (2026-10-17) — 열린 상한을 천천히 평소 값으로 되돌린다(빠른 스윙이 갑자기 끊기지 않게).
+            // 수정 (2026-10-18) — 이 줄이 위 else if 사이에 끼어 EndSwing을 막고 있었다("바람 빠진 인형" 원인).
+            // 붙기/놓기 판정과 따로 둔다.
             if (_swinging && speedCapDecay > 0f)
                 _speedCap = Mathf.MoveTowards(SpeedCap, maxSpeed, speedCapDecay * Time.fixedDeltaTime);
-            else if (!attached && _swinging) EndSwing();
 
             if (!attached) return;
 

@@ -272,6 +272,21 @@ namespace Momentum.Player.EditorTools
                 // 다른 공중 상태들과 똑같이 Grounded/히어로 조건으로 즉시 빠져나가게 한다 —
                 // hasExitTime이 없는 조건부 전이라 재생 진행률과 무관하게 그 프레임에 바로 먹힌다.
                 AddLandingTransitions(diveState, afterAir, swingLandState);
+
+                // 추가 생성 (2026-10-18) — JumpStart의 공중 출구.
+                // JumpStart는 짧은 점프용이라 "땅에 닿으면 이동으로" 출구 하나뿐이었다. 지상에서 R로 스윙을
+                // 시작하면 점프가 먼저 나가 Base가 여기 들어가는데, 스윙이 건물에 부딪혀 끊기는 순간 접지로
+                // 잡히면 SwingReleased 신호가 빠져 Base가 JumpStart 마지막 자세로 굳은 채 떨어졌다
+                // ("바람 빠진 인형", 2026-10-18 [스윙진단] 로그로 확인). 진짜 낙하(Falling)가 확정되면
+                // 신호와 상관없이 낙하 자세로 넘어가게 한다. 짧은 점프는 Falling 문턱 전에 착지하므로 영향 없다.
+                foreach (var child in layer.states)
+                {
+                    if (child.state.name != "JumpStart") continue;
+                    var jumpToFall = child.state.AddTransition(diveState);
+                    jumpToFall.hasExitTime = false;
+                    jumpToFall.duration = 0.15f;
+                    jumpToFall.AddCondition(AnimatorConditionMode.If, 0f, "Falling");
+                }
             }
             // "진짜 낙하로 확정됐을 때" 들어갈 곳. DiveStart가 있으면 거기, 없으면
             // 곧장 공중 루프/착지 단계로 — 위 afterDive와 같은 폴백 규칙이다.
