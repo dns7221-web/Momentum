@@ -81,6 +81,20 @@ namespace Momentum.Player
                  "SwingDive가 몸을 앞으로 숙이므로 팔을 앞으로 뻗은 수평 자세가 머리부터 떨어지는 그림이 된다.")]
         public AnimationClip diveLoop;
 
+        // 추가 생성 (2026-10-17)
+        [Header("포인트 런치 (우클릭 견인 도착 후 솟구침) — pointLaunchStart를 비우면 레이어를 만들지 않는다")]
+        [Tooltip("모서리에 도착해 솟구치는 순간 한 번 재생. UAL2_Standard의 NinjaJump_Start를 추천한다.")]
+        public AnimationClip pointLaunchStart;
+        [Tooltip("솟구친 뒤 공중에 있는 동안 반복. UAL2_Standard의 NinjaJump_Idle_Loop. 비우면 Start 마지막 자세로 멈춘다.")]
+        public AnimationClip pointLaunchAir;
+
+        // 추가 생성 (2026-10-19)
+        [Header("퍼치 (포인트 런치로 모서리에 올라선 뒤 웅크려 앉기) — perchIdle을 비우면 레이어를 만들지 않는다")]
+        [Tooltip("모서리에 내려앉는 순간 한 번. Perch/Hard Landing 추천. 비우면 곧장 perchIdle로.")]
+        public AnimationClip perchLand;
+        [Tooltip("모서리 위에 웅크려 앉아 있는 동안 반복. Perch/Crouch Idle 03 Looking Over(아래를 내려다봄) 추천.")]
+        public AnimationClip perchIdle;
+
         [Header("웹 슬링샷 (지상 우클릭 + 휠) — slingAim을 비우면 슬링샷 레이어를 만들지 않는다")]
         [Tooltip("충전 0%: 권총을 양손으로 겨눈 자세. 권총 팩의 W1_Stand_Aim_Idle_IPC.\n\n" +
                  "In-Place(IPC) 버전을 쓴다 — 조준 중엔 WebSlingshot이 몸을 제자리에 세우므로 " +
@@ -93,6 +107,18 @@ namespace Momentum.Player
         [Tooltip("우클릭을 놓아 튀어 오르는 순간부터 꼭짓점까지. 비우면 기본 레이어의 공중 자세가 보인다.\n\n" +
                  "착지 칸은 없다 — 비행이 끝나면 PlayerMovement가 스윙 착지(swingLand) 경로를 그대로 탄다.")]
         public AnimationClip slingLaunch;
+        // 추가 생성 (2026-10-18)
+        // 수정 (2026-10-19) — 몸 전체 자세가 아니라 "공중에 늘어진 다리"만 쓴다. 상체는 땅 F와 같은 권총 조준 + 허리 젖힘.
+        // 수정 (2026-10-19) — 스파이더맨 2 슬링샷 참고: 땅·공중 모두 웅크린 자세. 이름은 예전 그대로 둔다(에셋 값 유지).
+        [Tooltip("슬링샷 충전(땅·공중) 중 <b>다리</b>에 쓸 쪼그려 앉은 자세(SlingCrouch 레이어). Perch/Crouch Idle 03 추천 " +
+                 "(스파이더맨 2 피터처럼 낮게 앉아 버팀 — 몸통은 세운 채, 엉덩이는 WebSlingshot이 낮춘다). " +
+                 "팔·머리는 권총 조준(slingAim 블렌드) 그대로. 땅에선 쪼그려 앉고, 공중에선 무릎을 당긴 공 모양이 된다. " +
+                 "비우면 웅크리지 않는다.")]
+        public AnimationClip slingAirHang;
+        // 추가 생성 (2026-10-19)
+        [Tooltip("앞으로 대시(F)를 놓아 날아가는 동안의 자세. Mix/Flying(팔 뻗은 슈퍼히어로 비행) 추천. " +
+                 "비우면 slingLaunch(점프 자세)를 쓴다. 우클릭 옥상 오르기는 언제나 slingLaunch.")]
+        public AnimationClip slingDashFlight;
 
         [Header("갈고리 발사 (좌클릭 순간, 팔만) — 비우면 발사 레이어를 만들지 않는다")]
         [Tooltip("총을 들어 쏘는 순간 한 번 재생. 걷기·점프·스윙 위에 팔만 얹히므로, " +
