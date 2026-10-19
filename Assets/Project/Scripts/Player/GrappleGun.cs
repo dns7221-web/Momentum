@@ -361,6 +361,8 @@ namespace Momentum.Player
             if (autoAnchor == null) autoAnchor = gameObject.AddComponent<SwingAnchorFinder>();
             // 추가 생성 (2026-10-17) — 다이브(X)도 같은 방식으로 없으면 붙인다. 프리팹에 직접 붙이면 그 값을 쓴다.
             if (GetComponent<SwingDive>() == null) gameObject.AddComponent<SwingDive>();
+            // 추가 생성 (2026-10-18) — 카메라가 몸에 너무 붙으면 몸을 숨긴다.
+            if (GetComponent<CameraNearHide>() == null) gameObject.AddComponent<CameraNearHide>();
             if (animator == null) animator = GetComponentInChildren<Animator>();
             if (visualRoot == null && muzzle != null) visualRoot = muzzle.parent != null ? muzzle.parent.gameObject : null;
 
