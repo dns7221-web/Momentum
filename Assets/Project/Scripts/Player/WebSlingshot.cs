@@ -90,6 +90,41 @@ namespace Momentum.Player
                  "끊기는 것으로 충전이 날아가지 않게 하는 유예다. 점프는 이보다 길어서 걸린다.")]
         [Min(0f)][SerializeField] private float airborneGrace = 0.3f;
 
+        // 추가 생성 (2026-10-18) — 공중 F
+        [Tooltip("공중에서 F로 충전하는 동안 속도를 초당 이만큼(m/s) 줄여 줄에 걸린 것처럼 멈춘다. 중력도 상쇄한다.")]
+        [Min(0f)][SerializeField] private float airHangDecel = 40f;
+        // 추가 생성 (2026-10-19) — 땅 F도 마일즈처럼 살짝 떠올라 공중에 걸린 채 당긴다
+        [Tooltip("땅에서 F로 줄을 걸면 이만큼(m) 떠올라 공중에 걸린 채 당긴다. 0이면 땅에 선 채(예전).")]
+        [Min(0f)][SerializeField] private float groundLift = 0f; // 수정 (2026-10-19) — 피터처럼 땅에 앉아 버티기로(떠오르지 않음)
+        [Tooltip("공중에 걸린 높이로 몸을 붙잡는 세기(초당). 클수록 그 높이에 딱 붙는다.")]
+        [Min(0.1f)][SerializeField] private float hangSpring = 6f;
+        private float _hangY;
+        // 추가 생성 (2026-10-19) — 쪼그려 앉기: 다리만 굽히는 레이어(SlingCrouch)라 그만큼 모델을 내려 발을 땅에 붙인다
+        [Tooltip("충전 중 모델을 내리는 거리(m). 다리만 굽혀 들린 발을 땅에 붙이고 엉덩이를 낮춘다. 웅크린 클립의 엉덩이 높이 차이쯤.")]
+        [Min(0f)][SerializeField] private float crouchDrop = 0.45f;
+        private Vector3 _visualRestPos;
+        private float _crouch;
+        // 추가 생성 (2026-10-18) — 공중 F 충전 연출
+        [Tooltip("공중 F 충전이 꽉 찼을 때 몸 전체가 뒤로 젖혀지는 각도(°). 땅 F의 허리 젖힘을 공중에서 몸 전체로 보여준다. 0이면 끈다.")]
+        [Range(0f, 80f)][SerializeField] private float airChargeLeanMax = 0f; // 수정 (2026-10-19) — 앞으로 숙이면(12°) 무릎 꿇고 고개 숙인 자세가 됐다. 웅크림은 닌자 점프 클립이 맡는다
+        // 추가 생성 (2026-10-19)
+        [Tooltip("충전이 꽉 찼을 때 허리 젖힘 블렌드(SlingCharge)를 얼마까지 쓸지(0~1). 1이면 끝까지 젖혀 누운 것처럼 보인다.")]
+        [Range(0f, 1f)][SerializeField] private float chargeArchMax = 0.4f;
+        [Tooltip("젖힘 각도가 목표를 따라가는 속도(초당 각도). 휠 한 칸마다 오는 반동(_yank)이 보이려면 충분히 빨라야 한다.")]
+        [Min(1f)][SerializeField] private float airChargeLeanSpeed = 360f;
+
+        // 추가 생성 (2026-10-19) — 발사 연출
+        [Header("발사 연출 — \"팡\" (공통 연출 TraversalFx)")]
+        [Tooltip("발사 순간 멈칫(히트스톱) 길이(실제 초). 시야각 펀치·흔들림은 SpeedFieldOfView가 이미 준다.")]
+        [Min(0f)][SerializeField] private float launchHitStop = 0.05f;
+        [Tooltip("발사 뒤 속도선을 켜 둘 시간(초).")]
+        [Min(0f)][SerializeField] private float launchSpeedLines = 0.5f;
+        [Tooltip("앞으로 대시(F)로 날아가는 동안 몸을 앞으로 눕히는 각도(°). 슈퍼히어로 비행 자세. 0이면 끈다.")]
+        [Range(0f, 90f)][SerializeField] private float flightLean = 0f; // 수정 (2026-10-19) — 55는 점프 자세와 겹쳐 "개 자세"가 됐다. 비행은 Flying 클립이 맡는다
+        [Tooltip("발사 뒤 손·발 꼬리(트레일)를 켜 둘 시간(초). 0이면 끈다.")]
+        [Min(0f)][SerializeField] private float launchTrailTime = 1f;
+        private LimbTrails _trails;
+
         [Tooltip("조준하는 동안 몸을 앵커(건물) 쪽으로 돌리는 속도(초당 각도). 등을 보이고 " +
                  "우클릭해도 금방 건물을 마주 보게 된다.\n\n" +
                  "<b>PlayerMovement의 Turn Speed(기본 540)보다 커야 한다.</b> 조준 중에 방향키를 " +
@@ -173,6 +208,10 @@ namespace Momentum.Player
 
         /// <summary>화면에 보이는 충전량. Charge01을 일정 속도로 따라가 허리 젖힘을 부드럽게 만든다.</summary>
         private float _shownCharge;
+        // 추가 생성 (2026-10-18) — 공중 F 젖힘: 기울일 모델 뿌리, 원래 자세, 지금 각도
+        private Transform _visual;
+        private Quaternion _visualRest;
+        private float _lean;
 
         // 추가 생성 — 당김 스프링 상태. _yank는 허리 젖힘에 더하는 값, _yankVelocity는 그 변화 속도.
         private float _yank;
@@ -190,6 +229,12 @@ namespace Momentum.Player
         // 이름은 PlayerAnimatorBuilder.BuildSlingshotLayer가 만드는 파라미터와 같아야 한다.
         private static readonly int SlingBeginHash = Animator.StringToHash("SlingBegin");
         private static readonly int SlingLaunchHash = Animator.StringToHash("SlingLaunch");
+        // 추가 생성 (2026-10-18) — 공중 F 매달림 자세. 컨트롤러에 파라미터가 있을 때만 쓴다(없으면 땅 조준 자세).
+        // 수정 (2026-10-19) — 공중 F는 상체를 땅과 같은 Charge로 쓰고 다리만 SlingAirLegs 레이어가 덮는다.
+        private int _airLegsLayerIndex = -1;
+        // 추가 생성 (2026-10-19) — 앞으로 대시 비행 자세(Flying). 컨트롤러에 있을 때만 쓴다.
+        private static readonly int SlingLaunchForwardHash = Animator.StringToHash("SlingLaunchForward");
+        private bool _hasDashFlight;
         private static readonly int SlingChargeHash = Animator.StringToHash("SlingCharge");
 
         /// <summary>앵커. 건물이 움직일 일은 없지만 견인과 같은 방식(트랜스폼 + 로컬 좌표)으로 들고 있는다.</summary>
@@ -203,10 +248,18 @@ namespace Momentum.Player
 
         private float _launchTime;
         private float _airborneTime;
+        /// <summary>이번 충전을 공중에서 시작했는가(공중 F). 참이면 "떠 있으면 취소" 규칙을 안 쓰고 공중에 멈춘다.</summary>
+        private bool _airStart; // 추가 생성 (2026-10-18)
         private Vector3 _launchDirection;
 
         /// <summary>내가 켠 로프 그리기인지. WebGrabThrow와 같은 이유로, 남의 값을 지우지 않게 한다.</summary>
         private bool _ownsRopeOverride;
+
+        // 추가 생성 (2026-10-19) — 팔 IK(SlingPullIK)가 읽는 값
+        /// <summary>줄이 붙은 점(월드). 손이 이쪽을 향해 뻗었다가 끌려온다.</summary>
+        public Vector3 AimAnchor => AnchorPoint;
+        /// <summary>보이는 충전량(0~1, 휠 반동 포함). 손이 가슴 쪽으로 끌려오는 정도.</summary>
+        public float ChargeVisual01 => Mathf.Clamp01(_shownCharge + _yank);
 
         private Vector3 AnchorPoint =>
             _anchorTransform != null
@@ -225,7 +278,20 @@ namespace Momentum.Player
 
             // GrappleZip과 같은 방식으로 레이어를 이름으로 찾는다. 없으면(-1) 애니메이션 없이 동작만 한다.
             _animator = GetComponentInChildren<Animator>();
+            // 추가 생성 (2026-10-18) — Animator가 붙은 트랜스폼이 캐릭터 메시의 뿌리(SwingDive·SwingConstraint와 같은 대상).
+            if (_animator != null) { _visual = _animator.transform; _visualRest = _visual.localRotation; _visualRestPos = _visual.localPosition; }
+            // 추가 생성 (2026-10-19) — 손·발 꼬리. 없으면 실행 중에 붙인다.
+            _trails = GetComponent<LimbTrails>();
+            if (_trails == null) { _trails = gameObject.AddComponent<LimbTrails>(); _trails.Init(_animator); }
+            // 추가 생성 (2026-10-19) — 감을 때 총을 가슴 쪽으로 끌어당기는 팔 IK. Animator와 같은 오브젝트에 있어야 한다.
+            if (_animator != null && _animator.GetComponent<SlingPullIK>() == null)
+                _animator.gameObject.AddComponent<SlingPullIK>().Init(this);
             if (_animator != null) _slingLayerIndex = _animator.GetLayerIndex("Slingshot");
+            if (_animator != null) _airLegsLayerIndex = _animator.GetLayerIndex("SlingCrouch"); // 추가 생성 (2026-10-19)
+            // 추가 생성 (2026-10-18) — 없는 트리거를 쏘면 매번 경고가 뜨므로 미리 확인해 둔다.
+            if (_animator != null)
+                foreach (var parameter in _animator.parameters)
+                    if (parameter.nameHash == SlingLaunchForwardHash) _hasDashFlight = true;
         }
 
         private void OnEnable()
@@ -326,12 +392,22 @@ namespace Momentum.Player
             _anchorCollider = hit.collider;
             _anchorNormal = hit.normal;
             _airborneTime = 0f;
+            _airStart = _movement != null && !_movement.IsGrounded; // 추가 생성 (2026-10-18)
+            // 추가 생성 (2026-10-19) — 땅 F는 살짝 떠올라 공중 F와 같은 모션으로. 옥상 오르기(우클릭)는 땅에 선 채.
+            _hangY = _rb.position.y;
+            if (mode == LaunchMode.Forward && !_airStart && groundLift > 0f)
+            {
+                _airStart = true;
+                _hangY += groundLift;
+            }
             Charge01 = 0f;
             _shownCharge = 0f;
             IsCharging = true;
 
             // 조준 자세로. Bool이 아니라 Trigger인 이유는 PlayerAnimatorBuilder.BuildSlingshotLayer 주석 참고.
-            if (_animator != null) _animator.SetTrigger(SlingBeginHash);
+            // 수정 (2026-10-18) — 공중에서 시작했으면 매달림 자세(AirHang), 아니면 땅 조준 자세.
+            if (_animator != null)
+                _animator.SetTrigger(SlingBeginHash); // 수정 (2026-10-19) — 땅·공중 모두 같은 권총 조준(상체)
 
             // 견인과 같은 이유로 여기서 바로 넘긴다 — FixedUpdate까지 기다리면 그 사이 한 프레임 줄이 안 보인다.
             SetRope(AnchorPoint);
@@ -354,7 +430,11 @@ namespace Momentum.Player
         {
             hit = default;
             if (IsLaunching || gun == null || gun.IsAttached) return false;
-            if (_movement == null || !_movement.IsGrounded) return false;
+            // 수정 (2026-10-18) — 앞으로 대시(F)는 공중에서도 된다. 옥상 오르기(우클릭)는 지금처럼 땅에서만.
+            if (_movement == null) return false;
+            if (mode == LaunchMode.RoofClimb && !_movement.IsGrounded) return false;
+            // 추가 생성 (2026-10-19) — 우클릭에 포인트 런치 포인트가 보이면 양보한다(땅에서도 공중과 같게).
+            if (mode == LaunchMode.RoofClimb && _zip != null && _zip.WillPointLaunch) return false;
             if (_zip != null && _zip.IsZipping) return false;
 
             if (!gun.TryFindAnchor(out hit, includeProps: false, requireClearHang: false)) return false;
@@ -392,6 +472,9 @@ namespace Momentum.Player
 
             UpdateYank(); // 추가 생성 — 당김 스프링과 줄 떨림
 
+            // 추가 생성 (2026-10-19) — 감을수록 줄이 팽팽(굵게). 충전이 아닐 땐 0으로 돌려놓는다.
+            if (gun != null && _ownsRopeOverride) gun.RopeTension01 = IsCharging ? _shownCharge : 0f;
+
             if (_animator == null || _slingLayerIndex < 0) return;
 
             // 조준·비행 중에만 레이어를 켠다. 꼭짓점에서 IsLaunching이 꺼지면 서서히 내려가며
@@ -404,7 +487,7 @@ namespace Momentum.Player
                 ? Charge01
                 : Mathf.MoveTowards(_shownCharge, Charge01, chargeVisualSpeed * Time.deltaTime);
             // 수정 (2026-10-15) — 부드럽게 따라가는 젖힘 위에 당김 충격(_yank)을 얹는다 → 칸마다 툭, 툭 끊어진다.
-            _animator.SetFloat(SlingChargeHash, Mathf.Clamp01(_shownCharge + _yank));
+            _animator.SetFloat(SlingChargeHash, Mathf.Clamp01(_shownCharge + _yank) * chargeArchMax); // 수정 (2026-10-19) — 젖힘 상한
         }
 
         // 추가 생성 (2026-10-15)
@@ -433,6 +516,44 @@ namespace Momentum.Player
             if (gun != null) gun.RopeWobble = _yank * ropeWobblePerYank;
         }
 
+        // 추가 생성 (2026-10-18)
+        /// <summary>
+        /// 공중 F 충전 연출 — 충전할수록 몸 전체를 뒤로 젖힌다. 땅 F에서 허리가 젖혀지는 것(SlingCharge 블렌드)을
+        /// 공중 매달림 자세(Hanging) 위에서 보여주는 방법이다. 새 클립 없이 모델 뿌리만 돌리므로 어떤 자세와도 겹쳐 쓴다.
+        /// 휠 한 칸마다 튀는 반동(_yank)도 각도에 그대로 더해 "툭, 툭" 당겨지는 느낌을 준다.
+        /// 발사하거나 취소하면 0으로 돌아오고, 0이 되면 더는 모델 회전을 건드리지 않는다(다른 연출에 양보).
+        /// </summary>
+        private void LateUpdate()
+        {
+            // 추가 생성 (2026-10-19) — 충전 중엔(땅·공중) 몸통·다리를 웅크린 자세로(SlingCrouch 레이어).
+            AnimatorLayerFade.To(_animator, _airLegsLayerIndex, IsCharging ? 1f : 0f, animLayerLerpSpeed);
+
+            if (_visual == null) return;
+
+            // 추가 생성 (2026-10-19) — 충전 중 쪼그려 앉기(모델을 내림). 레이어 가중치와 같은 빠르기로 오르내린다.
+            float crouchTarget = IsCharging ? 1f : 0f;
+            bool crouchWas = _crouch > 0.001f;
+            _crouch = Mathf.MoveTowards(_crouch, crouchTarget, animLayerLerpSpeed * Time.deltaTime);
+            if (crouchWas || _crouch > 0.001f)
+                _visual.localPosition = _visualRestPos + Vector3.down * (crouchDrop * _crouch);
+
+            // 수정 (2026-10-19) — 부호 있는 각도로 바꿨다: 음수 = 뒤로 젖힘(공중 충전), 양수 = 앞으로 눕힘(F 비행).
+            float target = 0f;
+            // 수정 (2026-10-19) — 스파이더맨 2 슬링샷처럼 뒤로 눕지 않고 앞으로 살짝 웅크린다(땅·공중 같게).
+            // 충전할수록, 휠 한 칸마다 툭 하고 조금 더 말려 들어간다.
+            if (IsCharging)
+                target = airChargeLeanMax * Mathf.Clamp01(_shownCharge + _yank);
+            else if (IsLaunching && _mode == LaunchMode.Forward)
+                target = flightLean; // 추가 생성 (2026-10-19) — 날아가는 동안 슈퍼히어로 비행 자세
+
+            bool wasActive = Mathf.Abs(_lean) > 0.01f;
+            _lean = Mathf.MoveTowards(_lean, target, airChargeLeanSpeed * Time.deltaTime);
+            if (!wasActive && Mathf.Abs(_lean) <= 0.01f) return;
+
+            // 양수 X 회전 = 앞으로 숙임(SwingDive와 같은 방향), 음수 = 뒤로 젖힘.
+            _visual.localRotation = _visualRest * Quaternion.Euler(_lean, 0f, 0f);
+        }
+
         private void FixedUpdate()
         {
             if (IsCharging) TickCharge();
@@ -451,7 +572,7 @@ namespace Momentum.Player
             // 줄을 들고 있는 동안 다른 동작이 끼어들면 접는다. 스윙(R)이 붙었거나, 점프·낙하로
             // 발이 떨어졌거나, 앵커가 사라졌을 때 — 지상 전용 동작이라 공중으로 끌고 가지 않는다.
             if (gun.IsAttached || _anchorTransform == null ||
-                (!_launchQueued && _airborneTime > airborneGrace))
+                (!_launchQueued && !_airStart && _airborneTime > airborneGrace)) // 수정 (2026-10-18) — 공중 F는 제외
             {
                 EndCharge();
                 return;
@@ -480,9 +601,23 @@ namespace Momentum.Player
         /// </summary>
         private void HoldAim(Vector3 anchor)
         {
-            // 수평 속도만 지운다. y는 그대로 둬야 중력·접지 처리가 정상으로 돈다.
             Vector3 velocity = _rb.linearVelocity;
-            _rb.linearVelocity = new Vector3(0f, velocity.y, 0f);
+            if (_airStart)
+            {
+                // 추가 생성 (2026-10-18) — 공중 F: 줄에 걸린 것처럼 속도를 빠르게 0으로 줄이고,
+                // 이번 스텝에 더해질 중력만큼 미리 빼서 그 자리에 뜬 채로 충전한다.
+                // 수정 (2026-10-19) — 수평은 빠르게 0으로, 높이는 걸린 높이(_hangY)로 스프링처럼 붙잡는다.
+                // 이번 스텝에 더해질 중력만큼 미리 빼서 그 높이에 뜬 채로 충전한다.
+                Vector3 flat = Vector3.MoveTowards(new Vector3(velocity.x, 0f, velocity.z), Vector3.zero,
+                                                   airHangDecel * Time.fixedDeltaTime);
+                float vy = Mathf.Clamp((_hangY - _rb.position.y) * hangSpring, -6f, 6f);
+                _rb.linearVelocity = flat + Vector3.up * vy - Physics.gravity * Time.fixedDeltaTime;
+            }
+            else
+            {
+                // 수평 속도만 지운다. y는 그대로 둬야 중력·접지 처리가 정상으로 돈다.
+                _rb.linearVelocity = new Vector3(0f, velocity.y, 0f);
+            }
 
             Vector3 toAnchor = anchor - _rb.position;
             toAnchor.y = 0f;
@@ -516,7 +651,13 @@ namespace Momentum.Player
                           $"높이 {transform.position.y:F2}m", this);
 
             // 발사 자세로. 레이어 가중치는 IsLaunching이 켜져 있는 동안 Update가 1로 유지한다.
-            if (_animator != null) _animator.SetTrigger(SlingLaunchHash);
+            // 수정 (2026-10-19) — 앞으로 대시(F)는 비행 자세(Flying), 옥상 오르기는 지금 발사 자세.
+            if (_animator != null)
+                _animator.SetTrigger(_mode == LaunchMode.Forward && _hasDashFlight ? SlingLaunchForwardHash : SlingLaunchHash);
+
+            // 추가 생성 (2026-10-19) — "팡": 멈칫 + 속도선(공통 연출). 시야각 펀치·흔들림은 SpeedFieldOfView가 준다.
+            TraversalFx.Burst(_rb.position, hitStop: launchHitStop, speedLines: launchSpeedLines);
+            if (_trails != null && launchTrailTime > 0f) _trails.Play(launchTrailTime);
 
             EndCharge();
             IsLaunching = true;
@@ -651,6 +792,7 @@ namespace Momentum.Player
             _anchorTransform = null;
             _anchorCollider = null;
             Charge01 = 0f;
+            if (gun != null) gun.RopeTension01 = 0f; // 추가 생성 (2026-10-19)
             ClearRope();
         }
 
