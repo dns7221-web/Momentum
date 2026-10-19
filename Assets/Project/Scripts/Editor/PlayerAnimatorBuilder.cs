@@ -133,6 +133,14 @@ namespace Momentum.Player.EditorTools
             if (set.diveLoop != null)
                 BuildDiveLayer(controller, set);
 
+            // 추가 생성 (2026-10-17) — 포인트 런치 레이어. 가중치는 GrappleZip이 넣는다.
+            if (set.pointLaunchStart != null)
+                BuildPointLaunchLayer(controller, set);
+
+            // 추가 생성 (2026-10-19) — 퍼치 레이어. 가중치는 GrappleZip이 넣는다.
+            if (set.perchIdle != null)
+                BuildPerchLayer(controller, set);
+
             if (set.slingAim != null)
                 BuildSlingshotLayer(controller, set);
 
@@ -679,6 +687,93 @@ namespace Momentum.Player.EditorTools
         /// Zip 레이어처럼 <b>보일지 말지는 레이어 가중치가 정한다</b>(WebSlingshot이 넣음).
         /// 그래서 착지·이동으로 돌아가는 전이는 이 레이어에 없다 — 가중치가 0이 되면 끝이다.
         /// </summary>
+        // 추가 생성 (2026-10-17)
+        /// <summary>
+        /// 포인트 런치 전용 레이어 — 견인이 모서리에 도착해 솟구칠 때의 닌자 점프 자세.
+        /// 트리거 <c>PointLaunch</c>가 오면 어디서든 Start로, Start가 끝나면 Air 루프로 넘어간다.
+        /// 보일지 말지(가중치)는 <c>GrappleZip</c>이 정한다(착지·스윙·재견인 때 서서히 끈다).
+        /// </summary>
+        private static void BuildPointLaunchLayer(AnimatorController controller, PlayerAnimationSet set)
+        {
+            controller.AddParameter("PointLaunch", AnimatorControllerParameterType.Trigger);
+
+            controller.AddLayer("PointLaunch");
+            var layer = controller.layers[controller.layers.Length - 1];
+            layer.defaultWeight = 0f;
+            layer.blendingMode = AnimatorLayerBlendingMode.Override;
+            var sm = layer.stateMachine;
+
+            var start = sm.AddState("Start");
+            start.motion = set.pointLaunchStart;
+            sm.defaultState = start;
+
+            // Trigger인 이유는 슬링샷과 같다 — Any State 전이에 Bool을 쓰면 매 프레임 다시 걸려 첫 프레임에 갇힌다.
+            var begin = sm.AddAnyStateTransition(start);
+            begin.AddCondition(AnimatorConditionMode.If, 0f, "PointLaunch");
+            begin.hasExitTime = false;
+            begin.duration = 0.05f;          // 속도감 우선: 솟구치는 순간 바로
+            begin.canTransitionToSelf = true; // 연달아 런치해도 처음부터
+
+            if (set.pointLaunchAir != null)
+            {
+                var air = sm.AddState("Air");
+                air.motion = set.pointLaunchAir;
+                var toAir = start.AddTransition(air);
+                toAir.hasExitTime = true;   // Start를 거의 다 보여준 뒤 공중 루프로
+                toAir.exitTime = 0.9f;
+                toAir.duration = 0.15f;
+            }
+
+            var layers = controller.layers;
+            layers[layers.Length - 1] = layer;
+            controller.layers = layers;
+        }
+
+        // 추가 생성 (2026-10-19)
+        /// <summary>
+        /// 퍼치 레이어 — 포인트 런치로 모서리에 올라서면 내려앉기(perchLand) → 웅크려 앉아 있기(perchIdle 루프).
+        /// 트리거 <c>PerchStart</c>로 어디서든 처음부터 시작한다. 언제 끌지(가중치)는 <c>GrappleZip</c>이 정한다
+        /// (움직이거나 뛰거나 스윙하면 서서히 끈다).
+        /// </summary>
+        private static void BuildPerchLayer(AnimatorController controller, PlayerAnimationSet set)
+        {
+            controller.AddParameter("PerchStart", AnimatorControllerParameterType.Trigger);
+
+            controller.AddLayer("Perch");
+            var layer = controller.layers[controller.layers.Length - 1];
+            layer.defaultWeight = 0f;
+            layer.blendingMode = AnimatorLayerBlendingMode.Override;
+            var sm = layer.stateMachine;
+
+            var idle = sm.AddState("PerchIdle");
+            idle.motion = set.perchIdle;
+            sm.defaultState = idle;
+
+            // 내려앉기 클립이 있으면 그걸로 시작해 거의 끝날 때 앉기 루프로 녹인다.
+            AnimatorState first = idle;
+            if (set.perchLand != null)
+            {
+                var land = sm.AddState("PerchLand");
+                land.motion = set.perchLand;
+                var toIdle = land.AddTransition(idle);
+                toIdle.hasExitTime = true;
+                toIdle.exitTime = 0.8f;
+                toIdle.duration = 0.2f;
+                first = land;
+            }
+
+            // Trigger인 이유는 슬링샷·포인트 런치와 같다(Any State + Bool이면 첫 프레임에 갇힌다).
+            var begin = sm.AddAnyStateTransition(first);
+            begin.AddCondition(AnimatorConditionMode.If, 0f, "PerchStart");
+            begin.hasExitTime = false;
+            begin.duration = 0.08f;
+            begin.canTransitionToSelf = true;
+
+            var layers = controller.layers;
+            layers[layers.Length - 1] = layer;
+            controller.layers = layers;
+        }
+
         private static void BuildSlingshotLayer(AnimatorController controller, PlayerAnimationSet set)
         {
             controller.AddParameter("SlingBegin", AnimatorControllerParameterType.Trigger);
@@ -688,6 +783,8 @@ namespace Momentum.Player.EditorTools
             controller.AddLayer("Slingshot");
             var layer = controller.layers[controller.layers.Length - 1];
             layer.defaultWeight = 0f;
+            // 추가 생성 (2026-10-19) — 감는 동안 두 손(총)을 가슴 쪽으로 끌어당기는 IK(SlingPullIK)를 이 레이어에서 받는다.
+            layer.iKPass = true;
             layer.blendingMode = AnimatorLayerBlendingMode.Override;
             var sm = layer.stateMachine;
 
@@ -717,6 +814,21 @@ namespace Momentum.Player.EditorTools
             begin.duration = 0.1f;
             begin.canTransitionToSelf = true;   // 직전 조준을 취소하고 바로 다시 눌러도 처음부터
 
+            // 수정 (2026-10-19) — 공중 F는 상체를 땅과 같은 Charge(권총 조준 + 허리 젖힘)로 쓰고, 다리만 아래
+            // SlingAirLegs 레이어가 덮는다. 그래서 여기엔 공중 전용 상태를 두지 않는다.
+
+            // 추가 생성 (2026-10-19) — 앞으로 대시(F) 비행 자세. 옥상 오르기 발사(Launch)와 트리거를 나눈다.
+            if (set.slingDashFlight != null)
+            {
+                controller.AddParameter("SlingLaunchForward", AnimatorControllerParameterType.Trigger);
+                var flight = sm.AddState("DashFlight");
+                flight.motion = set.slingDashFlight;
+                var fly = sm.AddAnyStateTransition(flight);
+                fly.AddCondition(AnimatorConditionMode.If, 0f, "SlingLaunchForward");
+                fly.hasExitTime = false;
+                fly.duration = 0.08f;
+            }
+
             if (set.slingLaunch != null)
             {
                 var launch = sm.AddState("Launch");
@@ -726,6 +838,48 @@ namespace Momentum.Player.EditorTools
                 fire.hasExitTime = false;
                 fire.duration = 0.05f;   // 속도감 우선: 놓는 순간 거의 즉시
             }
+
+            var layers = controller.layers;
+            layers[layers.Length - 1] = layer;
+            controller.layers = layers;
+
+            // 추가 생성 (2026-10-19) — 슬링샷 충전 웅크리기 레이어(슬링샷 레이어 바로 위, 몸통·다리만).
+            if (set.slingAirHang != null)
+                BuildSlingCrouchLayer(controller, set);
+        }
+
+        // 추가 생성 (2026-10-19)
+        /// <summary>
+        /// 슬링샷 충전 중 <b>몸통·다리</b>를 웅크린 자세(Crouch)로 덮는 레이어. 팔·머리는 아래 Slingshot 레이어의
+        /// 권총 조준이 그대로 보인다 — 스파이더맨 2 슬링샷처럼 "줄에 걸려 웅크린 채 힘을 모으는" 실루엣.
+        /// 땅에서는 엉덩이가 내려가 쪼그려 앉고, 공중에서는 무릎을 가슴 쪽으로 당긴 공 모양이 된다.
+        /// 다리만 덮는다(몸통은 세운 채). 다리만 굽히면 발이 들리므로 WebSlingshot이 그만큼 모델을 내린다(crouchDrop).
+        /// 마스크는 코드로 만들어 컨트롤러 에셋 안에 같이 저장한다(AddObjectToAsset).
+        /// 가중치는 WebSlingshot이 충전 중에만 1로 올린다.
+        /// </summary>
+        private static void BuildSlingCrouchLayer(AnimatorController controller, PlayerAnimationSet set)
+        {
+            var mask = new AvatarMask { name = "SlingCrouchMask" };
+            // 휴머노이드 부위를 전부 끄고 몸통·다리·발 IK만 켠다.
+            for (int i = 0; i < (int)AvatarMaskBodyPart.LastBodyPart; i++)
+                mask.SetHumanoidBodyPartActive((AvatarMaskBodyPart)i, false);
+            // 수정 (2026-10-19) — 몸통(Body)은 뺐다. 넣으면 웅크린 클립의 앞으로 숙인 등까지 따라와 무릎 꿇은 자세가 된다.
+            // 엉덩이 높이는 WebSlingshot이 모델을 내려서 맞춘다(crouchDrop).
+            mask.SetHumanoidBodyPartActive(AvatarMaskBodyPart.LeftLeg, true);
+            mask.SetHumanoidBodyPartActive(AvatarMaskBodyPart.RightLeg, true);
+            mask.SetHumanoidBodyPartActive(AvatarMaskBodyPart.LeftFootIK, true);
+            mask.SetHumanoidBodyPartActive(AvatarMaskBodyPart.RightFootIK, true);
+            AssetDatabase.AddObjectToAsset(mask, controller);
+
+            controller.AddLayer("SlingCrouch");
+            var layer = controller.layers[controller.layers.Length - 1];
+            layer.defaultWeight = 0f;
+            layer.blendingMode = AnimatorLayerBlendingMode.Override;
+            layer.avatarMask = mask;
+
+            var legs = layer.stateMachine.AddState("Crouch");
+            legs.motion = set.slingAirHang;
+            layer.stateMachine.defaultState = legs;
 
             var layers = controller.layers;
             layers[layers.Length - 1] = layer;
