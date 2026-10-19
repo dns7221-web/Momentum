@@ -303,6 +303,16 @@ namespace Momentum.Player
         /// </summary>
         public float RopeWobble { get; set; }
 
+        // 추가 생성 (2026-10-19)
+        /// <summary>
+        /// 줄 팽팽함(0~1). 슬링샷을 감을수록 올라가고, 줄이 그만큼 굵어진다 — 힘이 모이는 게 줄에서 보이게.
+        /// 쓰는 쪽(WebSlingshot)이 다 쓰면 0으로 돌려놓는다.
+        /// </summary>
+        public float RopeTension01 { get; set; }
+        [Tooltip("팽팽함이 1일 때 줄 굵기 배율. 1이면 끈다.")]
+        [Min(1f)][SerializeField] private float ropeTensionWidth = 2.2f;
+        private float _ropeBaseWidth = -1f;
+
         /// <summary>최저점이 막혔을 때 부착점을 바깥으로 더 밀어보는 횟수와 한 걸음의 크기(m).</summary>
         private const int ClearanceSteps = 3;
         private const float ClearanceStep = 1f;
@@ -979,6 +989,10 @@ namespace Momentum.Player
         private void DrawRope(Vector3 target)
         {
             if (rope == null || muzzle == null) return;
+
+            // 추가 생성 (2026-10-19) — 팽팽할수록 굵게. 원래 굵기는 처음 한 번만 기억한다.
+            if (_ropeBaseWidth < 0f) _ropeBaseWidth = rope.widthMultiplier;
+            rope.widthMultiplier = _ropeBaseWidth * Mathf.Lerp(1f, ropeTensionWidth, Mathf.Clamp01(RopeTension01));
 
             // 건물 스윙 로프는 실제로 팽팽하니 직선이 맞다. 소품을 잡고 있을 때만
             // 곡선으로 그려 "매달려서 처져 있다"는 무게감을 보여준다.

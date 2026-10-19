@@ -67,6 +67,7 @@ namespace Momentum.Player
         private float _rollVelocity;
         private GrappleZip _zip;
         private WebSlingshot _slingshot;
+        private SwingDive _dive; // 추가 생성 (2026-10-19)
         private CapsuleCollider _capsule; // 추가 생성 — 벽 검사 구의 중심(몸 중심)을 잡는 데 쓴다
 
         // 컴포넌트를 켤 때의 인스펙터 값. 기준으로 쓰고, 끌 때 되돌린다.
@@ -175,6 +176,10 @@ namespace Momentum.Player
             // 추가 생성 (2026-10-15) — 슬링샷을 감는 동안 감은 양만큼 뒤로 빠진다.
             float slingCharge01 = _slingshot != null && _slingshot.IsCharging ? _slingshot.Charge01 : 0f;
             distanceScale *= Mathf.Lerp(1f, profile.slingChargeDistance, slingCharge01);
+            // 추가 생성 (2026-10-19) — 다이브 중엔 조금 뒤로. SwingDive는 실행 중에 붙으므로 여기서 찾는다.
+            if (_dive == null && _body != null) _dive = _body.GetComponentInChildren<SwingDive>();
+            bool diving = _dive != null && _dive.IsDiving;
+            if (diving) distanceScale *= profile.diveDistance;
             // SmoothDamp: 목표가 갑자기 바뀌어도 속도를 이어 가며 부드럽게 다가간다(유니티 내장).
             _orbital.Radius = Mathf.SmoothDamp(_orbital.Radius, _baseRadius * distanceScale,
                                                ref _radiusVelocity, profile.distanceSmoothTime, Mathf.Infinity, dt);
@@ -183,7 +188,8 @@ namespace Momentum.Player
             float pitch = settings.pitch
                           + profile.swingBottomPitch * bottom01
                           + profile.risingPitch * rising01
-                          + profile.slingChargePitch * slingCharge01; // 추가 생성 — 감을수록 낮게
+                          + profile.slingChargePitch * slingCharge01  // 추가 생성 — 감을수록 낮게
+                          + (diving ? profile.divePitch : 0f);         // 추가 생성 (2026-10-19) — 다이브는 위에서 내려다보기
             _debugHeight = 0f;
             if (State != CameraState.Ground)
             {

@@ -58,7 +58,15 @@ namespace Momentum.Player
         [Tooltip("발사 순간 화면 흔들림 세기. 0이면 끈다.")]
         [Min(0f)][SerializeField] private float launchShake = 0.6f;
 
+        // 추가 생성 (2026-10-19) — 다이브 시야각
+        [Header("다이브 — 떨어지는 속도만큼 더 넓게")]
+        [Tooltip("다이브 중 낙하 속도가 diveSpeedForMax일 때 시야각에 더할 각도(°). 0이면 끈다.")]
+        [Min(0f)][SerializeField] private float diveFovBonus = 10f;
+        [Tooltip("이 낙하 속도(m/s)에서 다이브 보너스가 최대가 된다.")]
+        [Min(1f)][SerializeField] private float diveSpeedForMax = 40f;
+
         private WebSlingshot _slingshot;
+        private SwingDive _dive; // 추가 생성 (2026-10-19)
         private float _punch;
         private bool _wasLaunching;
         private bool _wasFull;
@@ -88,6 +96,22 @@ namespace Momentum.Player
 
             // 추가 생성 — 슬링샷 상태를 읽기만 한다(쓰지 않는다). 같은 플레이어에 붙어 있다.
             _slingshot = body.GetComponentInChildren<WebSlingshot>();
+            _dive = body.GetComponentInChildren<SwingDive>(); // 추가 생성 (2026-10-19) — 실행 중에 붙으므로 Update에서도 다시 찾는다
+
+            // 추가 생성 (2026-10-19) — 속도선은 실제 카메라에 붙어야 화면에 맞춰 흐른다. 없으면 실행 중에 붙인다.
+            Camera main = Camera.main;
+            if (main != null && main.GetComponent<SpeedLines>() == null)
+                main.gameObject.AddComponent<SpeedLines>().Init(body);
+        }
+
+        // 추가 생성 (2026-10-19) — 공통 연출(TraversalFx)의 시야각 펀치를 듣는다.
+        private void OnEnable() => TraversalFx.FovPunch += OnFovPunch;
+        private void OnDisable() => TraversalFx.FovPunch -= OnFovPunch;
+
+        /// <summary>펀치를 더한다. 이미 들어 있는 펀치보다 센 쪽(절댓값)이 이긴다 — 겹쳐도 과하게 커지지 않게.</summary>
+        private void OnFovPunch(float degrees)
+        {
+            if (Mathf.Abs(degrees) > Mathf.Abs(_punch)) _punch = degrees;
         }
 
         // 추가 생성 (2026-10-15)
@@ -140,6 +164,11 @@ namespace Momentum.Player
 
             float target = Mathf.Lerp(_baseFieldOfView, maxFieldOfView,
                                       Mathf.Clamp01(speed / speedForMaxFov));
+
+            // 추가 생성 (2026-10-19) — 다이브 중이면 낙하 속도만큼 더 넓힌다(머리부터 꽂히는 속도감).
+            if (_dive == null) _dive = body.GetComponentInChildren<SwingDive>();
+            if (_dive != null && _dive.IsDiving && diveFovBonus > 0f)
+                target += diveFovBonus * Mathf.Clamp01(-velocity.y / diveSpeedForMax);
             // 추가 생성 — 슬링샷 충전 좁힘은 목표에 넣어 부드럽게 따라가게 한다.
             float slingOffset = SlingshotFovOffset();
             target += slingOffset - _punch;
