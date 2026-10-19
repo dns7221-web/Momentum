@@ -200,6 +200,19 @@ namespace Momentum.Player
         [Tooltip("붙는 순간의 속력이 maxSpeed보다 빠르면 그 속력까지 상한을 열고, 초당 이만큼(m/s)씩 maxSpeed로 되돌린다. " +
                  "작을수록 빠른 스윙이 오래 간다. 0이면 열린 상한이 끝까지 유지된다.")]
         [Min(0f)][SerializeField] private float speedCapDecay = 5f;
+
+        // 추가 생성 (2026-10-19) — 연출 (공통 연출 TraversalFx)
+        [Header("연출 — 다이브 잡기 · 놓는 순간")]
+        [Tooltip("다이브하다 줄을 잡는 순간 시야각 펀치(°). 음수면 확 좁아졌다가 돌아온다 — \"쑥\" 잡히는 느낌.")]
+        [SerializeField] private float diveCatchFovPunch = -8f;
+        [Tooltip("다이브하다 줄을 잡는 순간 멈칫 길이(실제 초). 0이면 끈다.")]
+        [Min(0f)][SerializeField] private float diveCatchHitStop = 0.04f;
+        [Tooltip("다이브하다 줄을 잡는 순간 화면 흔들림.")]
+        [Min(0f)][SerializeField] private float diveCatchShake = 0.3f;
+        [Tooltip("공중에서 줄을 놓는 순간 짧은 슬로우 길이(실제 초). 최고점에서 붕 뜨는 느낌. 0이면 끈다.")]
+        [Min(0f)][SerializeField] private float releaseSlowMo = 0.08f;
+        [Tooltip("그 슬로우의 타임스케일.")]
+        [Range(0.1f, 1f)][SerializeField] private float releaseSlowMoScale = 0.6f;
         // 지금 쓰는 속도 상한. 평소에는 maxSpeed, 빠르게 들어온 스윙에서는 그보다 크다.
         private float _speedCap;
         // 추가 생성 — 다이브 컴포넌트(실행 중에 GrappleGun이 붙이므로 처음 쓸 때 찾는다)
@@ -739,6 +752,10 @@ namespace Momentum.Player
             if (_dive == null) _dive = GetComponent<SwingDive>();
             bool fromDive = _dive != null && _dive.RecentlyDived;
             _speedCap = fromDive ? Mathf.Max(maxSpeed, _rb.linearVelocity.magnitude) : maxSpeed;
+            // 추가 생성 (2026-10-19) — 다이브하다 잡으면 "쑥": 시야각이 확 좁아졌다 돌아오고 아주 짧게 멈칫.
+            if (fromDive)
+                TraversalFx.Burst(_rb.position, fovPunch: diveCatchFovPunch, hitStop: diveCatchHitStop,
+                                  hitStopScale: 0.1f, shake: diveCatchShake);
             ComputePivotOffset(); // 추가 생성 (2026-10-15) — 옆 벽 앵커를 진행선 쪽으로 당긴 가상 지지점
             _lastAnchor = PivotPoint; // 추가 생성 — 붙자마자 놓아도 상한이 맞게 (수정: 가상 지지점 기준)
             RopeLength = Mathf.Max(minRopeLength, Vector3.Distance(_rb.position, PivotPoint));
@@ -944,6 +961,10 @@ namespace Momentum.Player
             // 수정 (2026-10-12) — 보상과 높이 상한은 플레이어가 놓았을 때만 건다. 벽에 박아
             // 끊긴 경우(OnCollisionEnter)나 컴포넌트가 꺼진 경우는 놓은 것이 아니다.
             if (!boost) return;
+
+            // 추가 생성 (2026-10-19) — 공중에서 놓는 순간 짧은 슬로우(최고점에서 붕 뜨는 느낌).
+            if (releaseSlowMo > 0f && (_movement == null || !_movement.IsGrounded))
+                TraversalFx.Burst(_rb.position, hitStop: releaseSlowMo, hitStopScale: releaseSlowMoScale);
 
             // 수정 — 보상과 높이 상한을 한 번에 계산하려고 속도를 지역 변수에 모아
             // 마지막에 한 번만 쓴다.
