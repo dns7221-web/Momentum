@@ -3,6 +3,7 @@
 물리 기반 웹 스윙(web-swinging) 이동 시스템.
 
 > 날짜별 조사 · 구현 · 버그 수정 전체 기록은 **[DEVLOG.md](DEVLOG.md)**에 있다.
+> 10월부터의 스파이더맨 업그레이드 작업은 **[DEVLOG-SPIDERMAN-UPGRADE.md](DEVLOG-SPIDERMAN-UPGRADE.md)**에 따로 모았다.
 > 이 문서는 설계 결정과 현재 상태만 남긴다.
 
 > ## "속도를 벌고, 지키고, 쓴다."
