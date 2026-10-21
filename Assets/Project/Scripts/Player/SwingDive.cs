@@ -40,6 +40,11 @@ namespace Momentum.Player
         [Min(1f)][SerializeField] private float fallSpeedForMaxPitch = 25f;
         [Tooltip("숙임 각도가 따라가는 속도(초당 각도).")]
         [Min(1f)][SerializeField] private float pitchSpeed = 240f;
+        // 추가 생성 (2026-10-20) — 다이브로 "툭" 바뀌지 않고 들어가게
+        [Tooltip("다이브 자세로 들어가는 시간(초). 레이어가 이 시간에 걸쳐 켜지고, 몸 숙임도 이 시간 상수로 부드럽게 따라간다. " +
+                 "0이면 예전처럼 즉시(레이어 0.125초, 숙임 초당 pitchSpeed).")]
+        [Min(0f)][SerializeField] private float enterTime = 0.35f;
+        private float _pitchVelocity;
         [Tooltip("Dive 레이어 가중치가 오르내리는 속도(초당). PlayerAnimatorBuilder가 diveLoop로 만든 레이어.")]
         [Min(0f)][SerializeField] private float animLayerLerpSpeed = AnimatorLayerFade.DefaultSpeed;
 
@@ -154,7 +159,9 @@ namespace Momentum.Player
         {
             // Dive 레이어 가중치 — 다이브 중이면 1, 아니면 0으로 서서히.
             if (_animator != null && _diveLayerIndex >= 0)
-                AnimatorLayerFade.To(_animator, _diveLayerIndex, IsDiving ? 1f : 0f, animLayerLerpSpeed);
+                // 수정 (2026-10-20) — 들어갈 땐 enterTime에 걸쳐 천천히, 나올 땐 예전 속도로.
+                AnimatorLayerFade.To(_animator, _diveLayerIndex, IsDiving ? 1f : 0f,
+                                     IsDiving && enterTime > 0f ? 1f / enterTime : animLayerLerpSpeed);
         }
 
         /// <summary>
@@ -174,7 +181,14 @@ namespace Momentum.Player
             }
 
             bool wasActive = _pitch > 0.01f;
-            _pitch = Mathf.MoveTowards(_pitch, target, pitchSpeed * Time.deltaTime);
+            // 수정 (2026-10-20) — 들어갈 땐 SmoothDamp(처음엔 천천히, 점점 빠르게)로 숙인다. 나올 땐 예전처럼 일정 속도.
+            if (IsDiving && enterTime > 0f)
+                _pitch = Mathf.SmoothDamp(_pitch, target, ref _pitchVelocity, enterTime * 0.5f, pitchSpeed);
+            else
+            {
+                _pitch = Mathf.MoveTowards(_pitch, target, pitchSpeed * Time.deltaTime);
+                _pitchVelocity = 0f;
+            }
             if (!wasActive && _pitch <= 0.01f) return; // 다이브와 무관할 때는 모델 회전을 건드리지 않는다
 
             // 모델의 오른쪽 축 기준으로 앞으로 숙인다(양수 X 회전 = 앞으로 숙임).

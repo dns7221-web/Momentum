@@ -313,6 +313,10 @@ namespace Momentum.Player
         [Min(1f)][SerializeField] private float ropeTensionWidth = 2.2f;
         private float _ropeBaseWidth = -1f;
 
+        // 추가 생성 (2026-10-21)
+        [Tooltip("스윙 바람(WindStreaks)에 쓸 바람결 텍스처. Kenney Particle Pack의 trace_05_rotated 추천(검은 바탕 흰 무늬). 비우면 바람이 안 나온다.")]
+        [SerializeField] private Texture windStreakTexture = null;
+
         /// <summary>최저점이 막혔을 때 부착점을 바깥으로 더 밀어보는 횟수와 한 걸음의 크기(m).</summary>
         private const int ClearanceSteps = 3;
         private const float ClearanceStep = 1f;
@@ -363,6 +367,8 @@ namespace Momentum.Player
             if (GetComponent<SwingDive>() == null) gameObject.AddComponent<SwingDive>();
             // 추가 생성 (2026-10-18) — 카메라가 몸에 너무 붙으면 몸을 숨긴다.
             if (GetComponent<CameraNearHide>() == null) gameObject.AddComponent<CameraNearHide>();
+            // 추가 생성 (2026-10-21) — 스윙 바람(빠르게 날 때 몸 옆을 스치는 바람 줄기).
+            if (GetComponent<WindStreaks>() == null) gameObject.AddComponent<WindStreaks>().Init(windStreakTexture);
             if (animator == null) animator = GetComponentInChildren<Animator>();
             if (visualRoot == null && muzzle != null) visualRoot = muzzle.parent != null ? muzzle.parent.gameObject : null;
 

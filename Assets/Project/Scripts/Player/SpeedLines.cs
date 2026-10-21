@@ -28,6 +28,10 @@ namespace Momentum.Player
         [Tooltip("선이 카메라 쪽으로 날아오는 속도(m/s). 빠를수록 휙휙 지나간다.")]
         [Min(1f)][SerializeField] private float lineSpeed = 60f;
         [SerializeField] private Color lineColor = new Color(1f, 1f, 1f, 0.35f);
+        // 추가 생성 (2026-10-20)
+        [Tooltip("켜면 속도에 비례해 선이 계속 나온다(예전). 끄면(기본) 연출 요청(TraversalFx 발사·다이브 잡기 등) 때만 잠깐 터진다. " +
+                 "화면 가장자리에 고정된 선이 스윙 내내 나오면 캐릭터와 따로 노는 것처럼 보여서 껐다 — 평소 속도감은 손·발 꼬리(LimbTrails)가 맡는다.")]
+        [SerializeField] private bool continuousBySpeed = false;
 
         private ParticleSystem _particles;
         private float _burstUntil;
@@ -47,7 +51,7 @@ namespace Momentum.Player
             if (_particles == null) return;
 
             float amount = 0f;
-            if (body != null)
+            if (continuousBySpeed && body != null) // 수정 (2026-10-20) — 기본은 꺼짐
                 amount = Mathf.InverseLerp(startSpeed, fullSpeed, body.linearVelocity.magnitude);
             if (Time.unscaledTime < _burstUntil) amount = 1f;
 
