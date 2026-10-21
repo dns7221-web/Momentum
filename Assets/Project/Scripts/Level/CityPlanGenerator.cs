@@ -1262,7 +1262,7 @@ namespace Momentum.Level
                 tree.transform.localRotation = Quaternion.Euler(0f, (index * 137.5f) % 360f, 0f);
                 tree.transform.localScale *= spec.scale * jitter;
                 lift = spec.lift * jitter;
-                AddMeshColliders(tree, true);
+                AddTreeColliders(tree); // 수정 (2026-10-20) — 잎에는 충돌체를 안 붙인다(아래 함수 설명)
                 // 추가 생성 — 나무 프리팹에 딸린 파티클(나뭇잎 떨어지기 등)을 끈다. 설정에서 켜면 그대로 둔다.
                 if (!settings.treeLeafParticles) DisableParticles(tree);
             }
@@ -1745,6 +1745,28 @@ namespace Momentum.Level
                 var mc = filter.gameObject.AddComponent<MeshCollider>();
                 mc.sharedMesh = filter.sharedMesh;
                 mc.convex = convex;
+            }
+        }
+
+        // 추가 생성 (2026-10-20)
+        /// <summary>
+        /// 나무 충돌체 — 줄기·가지에만 볼록(convex) MeshCollider를 붙이고 <b>잎(Leaves) 메시는 건너뛴다</b>.
+        /// 잎 메시는 면이 수천 개라 볼록 충돌체 한도(256면)를 넘어, 씬을 열 때마다 "Couldn't create a Convex Mesh …
+        /// Leaves_LOD0" 경고가 나무 수만큼 떴다. 잎은 지나가도 되는 부분이라 충돌이 필요 없다.
+        /// </summary>
+        private static void AddTreeColliders(GameObject go)
+        {
+            if (go.GetComponentInChildren<Collider>() != null) return;
+            foreach (var filter in go.GetComponentsInChildren<MeshFilter>())
+            {
+                if (filter.sharedMesh == null) continue;
+                string meshName = filter.sharedMesh.name;
+                if (meshName.IndexOf("Leaves", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    meshName.IndexOf("Leaf", System.StringComparison.OrdinalIgnoreCase) >= 0)
+                    continue;
+                var mc = filter.gameObject.AddComponent<MeshCollider>();
+                mc.sharedMesh = filter.sharedMesh;
+                mc.convex = true;
             }
         }
 
