@@ -60,6 +60,10 @@ namespace Momentum.Player
         [Header("스윙 (둘 다 비우면 스윙 레이어를 만들지 않는다)")]
         [Tooltip("로프에 매달려 도는 동안. 감고 있지 않을 때 반복 재생된다.")]
         public AnimationClip swingLoop;
+        // 추가 생성 (2026-10-21)
+        [Tooltip("켜면 swingLoop 클립이 제 박자로 반복되지 않고, 재생 위치가 실제 진자 위치(줄 각도)를 따라간다 — " +
+                 "뒤에선 젖히고 바닥에선 다리를 모으고 앞에선 뻗는 자세가 호와 맞는다(SwingPoseSync). 끄면 예전처럼 반복.")]
+        public bool syncSwingToArc = true;
         [Tooltip("로프를 당겨 몸이 앵커 쪽으로 끌려갈 때. 없으면 감는 동안에도 swingLoop이 유지된다.")]
         public AnimationClip reelLoop;
         [Tooltip("앵커에 붙는 순간 한 번 재생. 없으면 곧장 swingLoop으로 들어간다 — " +
@@ -68,6 +72,12 @@ namespace Momentum.Player
         [Tooltip("로프를 놓는 순간 한 번 재생. 없으면 스윙 레이어가 가중치만 서서히 " +
                  "내려가며 기본 레이어(낙하/이동)로 바로 넘어간다.")]
         public AnimationClip swingLand;
+
+        // 추가 생성 (2026-10-21)
+        [Header("공중 트릭 — 스윙을 놓는 순간 (비우면 트릭 레이어를 만들지 않는다)")]
+        [Tooltip("놓는 순간 무작위로 하나 재생할 트릭(공중제비·비틀기 등). ReleaseTricks가 높이·타이밍을 보고 고른다. " +
+                 "루트 회전·높이를 포즈에 굽혀야 몸이 실제로 돈다 — Tricks 폴더에 넣으면 TrickClipImport가 자동으로 설정한다.")]
+        public List<AnimationClip> releaseTricks = new List<AnimationClip>();
 
         [Header("견인 (우클릭) — 비우면 견인 레이어를 만들지 않는다")]
         [Tooltip("갈고리로 끌려가는 동안 반복. 없으면 견인 중에 <b>전용 자세가 없어</b> " +

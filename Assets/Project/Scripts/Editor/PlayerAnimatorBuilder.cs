@@ -153,6 +153,10 @@ namespace Momentum.Player.EditorTools
             if (set.grabAndSlam != null)
                 BuildGrabAndSlamLayer(controller, set);
 
+            // 추가 생성 (2026-10-21) — 공중 트릭 레이어. 맨 위에 둬서 놓은 직후 다른 레이어를 덮는다. 가중치는 ReleaseTricks가 넣는다.
+            if (set.releaseTricks != null && set.releaseTricks.Exists(c => c != null))
+                BuildTrickLayer(controller, set);
+
             EditorUtility.SetDirty(controller);
             AssetDatabase.SaveAssets();
 
@@ -545,6 +549,13 @@ namespace Momentum.Player.EditorTools
 
             var swingState = stateMachine.AddState("SwingLoop");
             swingState.motion = set.swingLoop;
+            // 추가 생성 (2026-10-21) — 재생 위치를 SwingCycle 파라미터로 받는다(Motion Time). SwingPoseSync가 줄 각도로 채운다.
+            if (set.syncSwingToArc)
+            {
+                controller.AddParameter("SwingCycle", AnimatorControllerParameterType.Float);
+                swingState.timeParameterActive = true;
+                swingState.timeParameter = "SwingCycle";
+            }
             stateMachine.defaultState = swingState;
 
             // 붙는 순간·놓는 순간 한 번씩 재생되는 전환 클립. Any State에서 트리거로 들어오는
@@ -558,7 +569,7 @@ namespace Momentum.Player.EditorTools
 
                 var toStart = stateMachine.AddAnyStateTransition(startState);
                 toStart.hasExitTime = false;
-                toStart.duration = 0.05f;
+                toStart.duration = 0.15f; // 수정 (2026-10-21) — 0.05는 붙는 순간 자세가 툭 바뀌었다
                 toStart.canTransitionToSelf = false;
                 toStart.AddCondition(AnimatorConditionMode.If, 0f, "SwingStarted");
 
@@ -566,8 +577,9 @@ namespace Momentum.Player.EditorTools
                 // 조건으로 가르지 않는 이유는 붙는 순간은 항상 SwingLoop에서 시작해야 하기 때문이다.
                 var startToLoop = startState.AddTransition(swingState);
                 startToLoop.hasExitTime = true;
-                startToLoop.exitTime = 0.9f;
-                startToLoop.duration = 0.1f;
+                // 수정 (2026-10-21) — 0.9/0.1은 Start Swinging 끝 자세까지 갔다가 루프로 튀었다. 일찍, 길게 섞는다.
+                startToLoop.exitTime = 0.7f;
+                startToLoop.duration = 0.25f;
             }
 
             // swingLand는 여기 두지 않는다. 예전에는 이 레이어에서 SwingEnded(=줄을 놓는
@@ -998,6 +1010,55 @@ namespace Momentum.Player.EditorTools
 
             var layers = controller.layers;
             layers[layers.Length - 1] = slamLayer;
+            controller.layers = layers;
+        }
+
+        // 추가 생성 (2026-10-21)
+        /// <summary>
+        /// 스윙을 놓는 순간의 공중 트릭 레이어(Override, 전신).
+        ///
+        /// 기본 상태는 동작이 없는 Empty. ReleaseTrick 트리거 + TrickIndex 값으로 Trick_0, Trick_1 … 중 하나에 들어가고,
+        /// 다 재생하면 Empty로 돌아온다. 트릭 상태에는 "Trick" 태그를 달아 ReleaseTricks가 재생 중인지 알아보게 한다.
+        /// </summary>
+        private static void BuildTrickLayer(AnimatorController controller, PlayerAnimationSet set)
+        {
+            controller.AddParameter("ReleaseTrick", AnimatorControllerParameterType.Trigger);
+            controller.AddParameter("TrickIndex", AnimatorControllerParameterType.Int);
+
+            controller.AddLayer("Trick");
+            var trickLayer = controller.layers[controller.layers.Length - 1];
+            trickLayer.defaultWeight = 0f;
+            trickLayer.blendingMode = AnimatorLayerBlendingMode.Override;
+
+            var stateMachine = trickLayer.stateMachine;
+            var empty = stateMachine.AddState("Empty");
+            stateMachine.defaultState = empty;
+
+            int index = 0;
+            foreach (var clip in set.releaseTricks)
+            {
+                if (clip == null) continue;
+                var trick = stateMachine.AddState("Trick_" + index);
+                trick.motion = clip;
+                trick.tag = "Trick";
+
+                var enter = stateMachine.AddAnyStateTransition(trick);
+                enter.hasExitTime = false;
+                enter.duration = 0.15f;
+                enter.canTransitionToSelf = false;
+                enter.AddCondition(AnimatorConditionMode.If, 0f, "ReleaseTrick");
+                enter.AddCondition(AnimatorConditionMode.Equals, index, "TrickIndex");
+
+                var exit = trick.AddTransition(empty);
+                exit.hasExitTime = true;
+                // 끝까지 재생한 뒤 넘어간다 — 그 전에 ReleaseTricks가 레이어 가중치를 이미 0 가까이 내려 둔다.
+                exit.exitTime = 1f;
+                exit.duration = 0f;
+                index++;
+            }
+
+            var layers = controller.layers;
+            layers[layers.Length - 1] = trickLayer;
             controller.layers = layers;
         }
 
