@@ -88,6 +88,22 @@ namespace Momentum.Player
         [Tooltip("도착해서 모서리 위로 넘어가는 작은 홉 (x = 옥상 쪽, y = 위, m/s).")]
         [SerializeField] private Vector2 perchHop = new Vector2(3f, 3f);
 
+        // 추가 생성 (2026-10-21) — 로프 타기가 아니라 스파이더맨식 "한 번 당기고 포물선으로 휙"
+        [Header("포인트 런치 — 포물선 (한 번 당긴 반동으로 날아간다)")]
+        [Tooltip("켜면(기본) 줄을 따라 직선으로 끌려가지 않고, 한 번 당긴 반동으로 포물선을 그리며 목표에 내려앉는다. " +
+                 "줄은 당기는 순간에만 보인다. 끄면 예전 직선 견인(로프 타기처럼 보였다).")]
+        [SerializeField] private bool pointArc = true;
+        [Tooltip("포물선 비행 속도(m/s, 거리 ÷ 이 값 = 비행 시간). 클수록 빠르다.")]
+        [Min(5f)][SerializeField] private float pointArcSpeed = 45f;
+        [Tooltip("비행 시간 하한/상한(초). 가까워도 너무 순간이동처럼, 멀어도 너무 늘어지지 않게.")]
+        [SerializeField] private Vector2 pointArcTimeRange = new Vector2(0.35f, 0.9f);
+        [Tooltip("포물선 중력 배율. 클수록 위로 크게 솟았다가 내리꽂듯 내려앉는다(호가 둥글다). 1이면 보통 중력.")]
+        [Min(0f)][SerializeField] private float pointArcGravity = 2.5f;
+        [Tooltip("당긴 뒤 줄이 보이는 시간(초). 이 뒤로는 줄 없이 반동으로만 날아간다.")]
+        [Min(0f)][SerializeField] private float pointArcRopeTime = 0.15f;
+        private float _arcDuration;
+        private float _arcMaxSpeed;
+
         [Header("도착 — 여기서 속도를 새로 쓴다")]
         [Tooltip("도착 시 최소 수평 속도(m/s). 이미 이보다 빠르면 그 속도를 유지한다 — " +
                  "스윙으로 벌어둔 속도를 견인이 깎으면 '지킨다' 축이 무너진다.")]
@@ -426,6 +442,13 @@ namespace Momentum.Player
 
             float distance = Vector3.Distance(_rb.position, _perch.ApproachPoint);
             _pullSpeed = Mathf.Clamp(distance / pointZipTime, pointZipSpeedRange.x, pointZipSpeedRange.y);
+            // 추가 생성 (2026-10-21) — 포물선: 비행 시간을 정하고, 중력은 우리가 직접 넣는다(물리 중력과 겹치지 않게 끔).
+            if (pointArc)
+            {
+                _arcDuration = Mathf.Clamp(distance / pointArcSpeed, pointArcTimeRange.x, pointArcTimeRange.y);
+                _arcMaxSpeed = 0f;
+                _rb.useGravity = false;
+            }
 
             IsZipping = true;
             if (_movement != null) _movement.SuspendHorizontalControl = true;
@@ -534,6 +557,13 @@ namespace Momentum.Player
             // 속도 대입은 물리 엔진의 충돌 처리를 그대로 통과하므로(위치를 직접 옮기는
             // 것과 다르다) 도중에 벽을 만나면 정상적으로 막힌다.
             // 수정 (2026-10-19) — 포인트 런치는 목표 가까이서 감속한다(대시가 아니라 "도착"하게).
+            // 추가 생성 (2026-10-21) — 포물선 비행
+            if (_pointMode && pointArc)
+            {
+                PointArcStep();
+                return;
+            }
+
             float pull = _pullSpeed;
             if (_pointMode && pointBrakeDistance > 0f && toTarget.magnitude < pointBrakeDistance)
                 pull = Mathf.Max(pointBrakeMinSpeed, _pullSpeed * toTarget.magnitude / pointBrakeDistance);
@@ -752,11 +782,41 @@ namespace Momentum.Player
         /// 더하는 방식이면 연타할 때마다 쌓여 감기가 냈던 사고를 그대로 재현한다.
         /// 수평만 하한으로 두는 것은 스윙으로 벌어둔 속도를 깎지 않기 위해서다.
         /// </summary>
+        // 추가 생성 (2026-10-21)
+        /// <summary>
+        /// 포인트 런치 포물선 한 스텝. 남은 시간 τ 안에 목표에 닿으려면 지금 속도가 얼마여야 하는지를
+        /// 등가속도 식(목표 = 위치 + 속도·τ + ½·중력·τ²)으로 매 스텝 다시 풀어 대입한다.
+        /// 처음 한 번 푼 값이 곧 "당기는 순간의 반동"이고, 그 뒤는 중력만 받는 포물선이 된다 —
+        /// 다시 푸는 건 도중에 벽에 스치거나 목표가 움직여도 정확히 내려앉게 하는 보정이다.
+        /// 줄은 당긴 직후 <see cref="pointArcRopeTime"/> 동안만 그린다.
+        /// </summary>
+        private void PointArcStep()
+        {
+            float remaining = _arcDuration - _elapsed;
+            Vector3 toTarget = TargetPoint - _rb.position;
+            if (remaining <= Time.fixedDeltaTime)
+            {
+                Stop(arrived: true);
+                return;
+            }
+
+            Vector3 gravity = Physics.gravity * pointArcGravity;
+            Vector3 velocity = (toTarget - 0.5f * gravity * remaining * remaining) / remaining;
+
+            // 벽에 막혀 남은 시간이 거의 없는데 거리가 남으면 속도가 폭주한다 — 처음 당긴 속도의 1.5배로 자른다.
+            if (_arcMaxSpeed <= 0f) _arcMaxSpeed = velocity.magnitude * 1.5f;
+            _rb.linearVelocity = Vector3.ClampMagnitude(velocity, _arcMaxSpeed);
+
+            if (_movement != null) _movement.SuspendHorizontalControl = true;
+            gun.OverrideRopeTarget = _elapsed <= pointArcRopeTime ? TargetPoint : (Vector3?)null;
+        }
+
         private void Stop(bool arrived)
         {
             IsZipping = false;
             _retracting = false; // 추가 생성 — 반동 대시 회수 단계도 끝낸다
             if (_airMode) _rb.useGravity = true;   // 수정 — 웹 집 동안 꺼둔 중력을 되살린다
+            if (_pointMode && pointArc) _rb.useGravity = true; // 추가 생성 (2026-10-21) — 포물선 동안 꺼둔 중력
             _airMode = false;       // 추가 생성
             _launched = false;      // 추가 생성
             bool wasPoint = _pointMode; // 추가 생성 (2026-10-17)
