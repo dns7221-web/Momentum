@@ -217,6 +217,9 @@ namespace Momentum.Player
         private float _speedCap;
         // 추가 생성 — 다이브 컴포넌트(실행 중에 GrappleGun이 붙이므로 처음 쓸 때 찾는다)
         private SwingDive _dive;
+        // 추가 생성 (2026-10-21) — 공중 트릭 (GrappleGun이 실행 중에 붙인다)
+        private ReleaseTricks _tricks;
+        private bool _releaseGood;
         /// <summary>속도를 자를 때 쓰는 상한. 0(초기화 전)이면 maxSpeed.</summary>
         private float SpeedCap => _speedCap > 0f ? _speedCap : maxSpeed;
 
@@ -718,6 +721,8 @@ namespace Momentum.Player
         /// 진자 계산만 그 점에서 <see cref="_pivotOffset"/>만큼 옆으로 옮긴 이 점을 쓴다.
         /// </summary>
         private Vector3 PivotPoint => gun.AnchorPoint - _pivotOffset;
+        /// <summary>진자 지지점(가상 지지점 포함). 스윙 자세 맞추기(SwingPoseSync)가 읽는다. 추가 생성 (2026-10-21)</summary>
+        public Vector3 SwingPivot => PivotPoint;
 
         // 추가 생성 (2026-10-15)
         /// <summary>
@@ -924,6 +929,7 @@ namespace Momentum.Player
             bool good = ahead && velocity.y > 0f &&
                         pastVertical >= goodJumpWindow.x && pastVertical <= goodJumpWindow.y;
 
+            _releaseGood = good; // 추가 생성 (2026-10-21) — 좋은 타이밍이면 공중 트릭이 꼭 나온다
             EndSwing(true, jumpExtraApex, good ? goodJumpBonus : plainJumpBonus);
             gun.ReleaseByJump();
 
@@ -965,6 +971,11 @@ namespace Momentum.Player
             // 추가 생성 (2026-10-19) — 공중에서 놓는 순간 짧은 슬로우(최고점에서 붕 뜨는 느낌).
             if (releaseSlowMo > 0f && (_movement == null || !_movement.IsGrounded))
                 TraversalFx.Burst(_rb.position, hitStop: releaseSlowMo, hitStopScale: releaseSlowMoScale);
+
+            // 추가 생성 (2026-10-21) — 공중 트릭(공중제비 등). 높이·확률은 ReleaseTricks가 본다.
+            if (_tricks == null) _tricks = GetComponent<ReleaseTricks>();
+            if (_tricks != null) _tricks.TryPlay(_releaseGood);
+            _releaseGood = false;
 
             // 수정 — 보상과 높이 상한을 한 번에 계산하려고 속도를 지역 변수에 모아
             // 마지막에 한 번만 쓴다.

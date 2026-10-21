@@ -369,6 +369,10 @@ namespace Momentum.Player
             if (GetComponent<CameraNearHide>() == null) gameObject.AddComponent<CameraNearHide>();
             // 추가 생성 (2026-10-21) — 스윙 바람(빠르게 날 때 몸 옆을 스치는 바람 줄기).
             if (GetComponent<WindStreaks>() == null) gameObject.AddComponent<WindStreaks>().Init(windStreakTexture);
+            // 추가 생성 (2026-10-21) — 스윙을 놓는 순간 공중 트릭.
+            if (GetComponent<ReleaseTricks>() == null) gameObject.AddComponent<ReleaseTricks>();
+            // 추가 생성 (2026-10-21) — 스윙 클립 재생 위치를 실제 진자 위치에 맞춘다(호 위치별 자세).
+            if (GetComponent<SwingPoseSync>() == null) gameObject.AddComponent<SwingPoseSync>();
             if (animator == null) animator = GetComponentInChildren<Animator>();
             if (visualRoot == null && muzzle != null) visualRoot = muzzle.parent != null ? muzzle.parent.gameObject : null;
 
