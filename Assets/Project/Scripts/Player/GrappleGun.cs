@@ -278,6 +278,9 @@ namespace Momentum.Player
         /// </summary>
         public event Action Detached;
 
+        /// <summary>줄을 쏘는 순간(발사 동작이 나가는 순간) 한 번 울린다. 소리(TraversalAudio)가 듣는다. 추가 생성 (2026-10-21)</summary>
+        public event Action Fired;
+
         /// <summary>
         /// 법선의 y가 이 값 이상이면 "평평한(옥상 같은) 면"으로 본다.
         ///
@@ -316,6 +319,9 @@ namespace Momentum.Player
         // 추가 생성 (2026-10-21)
         [Tooltip("스윙 바람(WindStreaks)에 쓸 바람결 텍스처. Kenney Particle Pack의 trace_05_rotated 추천(검은 바탕 흰 무늬). 비우면 바람이 안 나온다.")]
         [SerializeField] private Texture windStreakTexture = null;
+        // 추가 생성 (2026-10-21)
+        [Tooltip("착지 먼지(LandingDust)에 쓸 연기 텍스처. Kenney Particle Pack의 smoke_04 추천(흰색 + 투명 배경). 비우면 먼지가 안 나온다.")]
+        [SerializeField] private Texture landingDustTexture = null;
 
         /// <summary>최저점이 막혔을 때 부착점을 바깥으로 더 밀어보는 횟수와 한 걸음의 크기(m).</summary>
         private const int ClearanceSteps = 3;
@@ -369,6 +375,8 @@ namespace Momentum.Player
             if (GetComponent<CameraNearHide>() == null) gameObject.AddComponent<CameraNearHide>();
             // 추가 생성 (2026-10-21) — 스윙 바람(빠르게 날 때 몸 옆을 스치는 바람 줄기).
             if (GetComponent<WindStreaks>() == null) gameObject.AddComponent<WindStreaks>().Init(windStreakTexture);
+            // 추가 생성 (2026-10-21) — 빠르게 떨어져 착지하면 발밑 먼지(착지 애니 대신).
+            if (GetComponent<LandingDust>() == null) gameObject.AddComponent<LandingDust>().Init(landingDustTexture);
             // 추가 생성 (2026-10-21) — 스윙을 놓는 순간 공중 트릭.
             if (GetComponent<ReleaseTricks>() == null) gameObject.AddComponent<ReleaseTricks>();
             // 추가 생성 (2026-10-21) — 스윙 클립 재생 위치를 실제 진자 위치에 맞춘다(호 위치별 자세).
@@ -482,6 +490,7 @@ namespace Momentum.Player
         /// </summary>
         private void FireAnimation()
         {
+            Fired?.Invoke(); // 추가 생성 (2026-10-21) — 발사 소리
             if (animator == null) return;
             animator.SetTrigger(FireHash);
             _fireWeightUntil = Time.time + fireLayerHoldTime;
