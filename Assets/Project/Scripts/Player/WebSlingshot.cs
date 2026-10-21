@@ -118,11 +118,17 @@ namespace Momentum.Player
         [Tooltip("발사 순간 멈칫(히트스톱) 길이(실제 초). 시야각 펀치·흔들림은 SpeedFieldOfView가 이미 준다.")]
         [Min(0f)][SerializeField] private float launchHitStop = 0.05f;
         [Tooltip("발사 뒤 속도선을 켜 둘 시간(초).")]
-        [Min(0f)][SerializeField] private float launchSpeedLines = 0.5f;
+        [Min(0f)][SerializeField] private float launchSpeedLines = 0f; // 수정 (2026-10-21) — 바람 연출 교체 전까지 끔
         [Tooltip("앞으로 대시(F)로 날아가는 동안 몸을 앞으로 눕히는 각도(°). 슈퍼히어로 비행 자세. 0이면 끈다.")]
         [Range(0f, 90f)][SerializeField] private float flightLean = 0f; // 수정 (2026-10-19) — 55는 점프 자세와 겹쳐 "개 자세"가 됐다. 비행은 Flying 클립이 맡는다
         [Tooltip("발사 뒤 손·발 꼬리(트레일)를 켜 둘 시간(초). 0이면 끈다.")]
-        [Min(0f)][SerializeField] private float launchTrailTime = 1f;
+        [Min(0f)][SerializeField] private float launchTrailTime = 0f; // 수정 (2026-10-21) — 바람 연출 교체 전까지 끔
+        // 추가 생성 (2026-10-21)
+        [Tooltip("발사 순간 한 번에 뿌리는 바람 조각 수(WindStreaks). 0이면 끈다.")]
+        [Min(0)][SerializeField] private int launchWindBurst = 18;
+        // 추가 생성 (2026-10-20)
+        [Tooltip("손·발 꼬리에 쓸 트레일 프리팹. 비우면 흰 단색 꼬리. Vefects/Trails VFX URP/VFX/Particles/VFX_Trail_Sound 추천(공기 물결 + 왜곡).")]
+        [SerializeField] private GameObject limbTrailPrefab = null;
         private LimbTrails _trails;
 
         [Tooltip("조준하는 동안 몸을 앵커(건물) 쪽으로 돌리는 속도(초당 각도). 등을 보이고 " +
@@ -282,7 +288,7 @@ namespace Momentum.Player
             if (_animator != null) { _visual = _animator.transform; _visualRest = _visual.localRotation; _visualRestPos = _visual.localPosition; }
             // 추가 생성 (2026-10-19) — 손·발 꼬리. 없으면 실행 중에 붙인다.
             _trails = GetComponent<LimbTrails>();
-            if (_trails == null) { _trails = gameObject.AddComponent<LimbTrails>(); _trails.Init(_animator); }
+            if (_trails == null) { _trails = gameObject.AddComponent<LimbTrails>(); _trails.Init(_animator, limbTrailPrefab); }
             // 추가 생성 (2026-10-19) — 감을 때 총을 가슴 쪽으로 끌어당기는 팔 IK. Animator와 같은 오브젝트에 있어야 한다.
             if (_animator != null && _animator.GetComponent<SlingPullIK>() == null)
                 _animator.gameObject.AddComponent<SlingPullIK>().Init(this);
@@ -658,6 +664,9 @@ namespace Momentum.Player
             // 추가 생성 (2026-10-19) — "팡": 멈칫 + 속도선(공통 연출). 시야각 펀치·흔들림은 SpeedFieldOfView가 준다.
             TraversalFx.Burst(_rb.position, hitStop: launchHitStop, speedLines: launchSpeedLines);
             if (_trails != null && launchTrailTime > 0f) _trails.Play(launchTrailTime);
+            // 추가 생성 (2026-10-21) — 발사 순간 스윙 바람(WindStreaks)을 한 번에 확 뿌린다. 그 뒤로는 속도에 따라 저절로 나온다.
+            var wind = GetComponent<WindStreaks>();
+            if (wind != null) wind.Burst(launchWindBurst);
 
             EndCharge();
             IsLaunching = true;
