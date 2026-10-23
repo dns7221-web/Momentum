@@ -41,6 +41,14 @@ namespace Momentum.Level
                  "ContinuousDynamic(움직이는 것끼리도 스윕, 더 비쌈)까지는 필요 없다.")]
         [SerializeField] private CollisionDetectionMode thrownMode = CollisionDetectionMode.Continuous;
 
+        // 추가 생성 (2026-10-23) — 시작 렉 줄이기
+        [Header("시작")]
+        [Tooltip("잠든 채로 시작한다. Rigidbody는 깨어 있는 채로 생겨서, 옥상·광장에 가만히 놓인 소품 " +
+                 "수백 개가 Play 직후 1초 동안 전부 \"내려앉는\" 계산을 받았다(물리 한 번당 비용이 평소의 3~4배).\n\n" +
+                 "잠들어 있어도 플레이어·거미줄이 닿거나, 속도를 주거나(잡기·던지기), 키네마틱을 바꾸면 " +
+                 "PhysX가 바로 깨우므로 반응은 그대로다. 배치 때 바닥과 살짝 겹친 소품은 건드릴 때까지 그 자리에 있다.")]
+        [SerializeField] private bool startAsleep = true;
+
         private Rigidbody _rigidbody;
 
         /// <summary>던져져 날아가는 중인지. 첫 충돌에서 꺼진다.</summary>
@@ -55,6 +63,10 @@ namespace Momentum.Level
             // 도시 생성 쪽만 고치면 프리팹으로 배치한 것들이 조용히 예전 값으로 남는다.
             if (continuousOnlyWhileThrown)
                 _rigidbody.collisionDetectionMode = CollisionDetectionMode.Discrete;
+
+            // 추가 생성 (2026-10-23) — 잠든 채로 시작(startAsleep 설명 참고). 첫 물리 스텝 전에 재워야
+            // 소품끼리·바닥과의 접촉 계산이 처음부터 빠지므로 Start가 아니라 Awake에서 한다.
+            if (startAsleep) _rigidbody.Sleep();
         }
 
         /// <summary>
