@@ -783,6 +783,19 @@ namespace Momentum.Level
 
             if (layer >= 0) SetLayerRecursive(tile, layer);
             if (collide && settings.surfaceColliders) AddMeshColliders(tile);
+            // 추가 생성 (2026-10-23) — 평평한 바닥·데칼은 그림자를 드리우지 않는다(렌더 최적화, groundCastShadows 설명 참고).
+            if (!settings.groundCastShadows) DisableShadowCasting(tile);
+        }
+
+        // 추가 생성 (2026-10-23)
+        /// <summary>
+        /// 그 아래 모든 렌더러가 그림자를 드리우지 않게 한다. 받는 쪽(receiveShadows)은 그대로 둬서 건물 그림자는 계속 진다.
+        /// 이미 깔린 씬의 바닥은 에디터 메뉴 Momentum/렌더 최적화의 "바닥 조각 그림자"로 같은 일을 한다.
+        /// </summary>
+        private static void DisableShadowCasting(GameObject go)
+        {
+            foreach (Renderer renderer in go.GetComponentsInChildren<Renderer>(true))
+                renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
         }
 
         /// <summary>
