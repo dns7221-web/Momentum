@@ -492,6 +492,10 @@ namespace Momentum.Level
         [Header("성능")]
         [Tooltip("생성물을 Static으로 표시해 정적 배칭을 받는다.")]
         public bool markStatic = true;
+        // 추가 생성 (2026-10-23) — 렌더 최적화
+        [Tooltip("바닥 타일(차도·인도·교차로)이 그림자를 드리울지. 평평해서 드리우는 그림자가 거의 안 보이는데, " +
+                 "그림자 단계마다 다시 그려져 1만 장이 넘으면 무겁다. 꺼도 건물 그림자는 바닥에 그대로 진다.")]
+        public bool groundCastShadows = false;
 
         // ─── 파생값 ───
 

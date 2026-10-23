@@ -692,6 +692,19 @@ namespace Momentum.Level
             // 정적인 바닥이라 오목한 메시 충돌체를 그대로 쓴다. 볼록(convex)으로 감싸면
             // 인도(y=0)와 차도(y=-0.15)의 단차가 사라져 차도 위를 떠서 걷게 된다.
             if (settings.surfaceColliders) AddMeshColliders(tile, false);
+            // 추가 생성 (2026-10-23) — 평평한 바닥은 그림자를 드리우지 않는다(렌더 최적화, groundCastShadows 설명 참고).
+            if (!settings.groundCastShadows) DisableShadowCasting(tile);
+        }
+
+        // 추가 생성 (2026-10-23)
+        /// <summary>
+        /// 그 아래 모든 렌더러가 그림자를 드리우지 않게 한다. 받는 쪽(receiveShadows)은 그대로 둬서 건물 그림자는 계속 진다.
+        /// 이미 깔린 씬의 바닥은 에디터 메뉴 Momentum/렌더 최적화의 "바닥 조각 그림자"로 같은 일을 한다.
+        /// </summary>
+        private static void DisableShadowCasting(GameObject go)
+        {
+            foreach (Renderer renderer in go.GetComponentsInChildren<Renderer>(true))
+                renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
         }
 
         /// <summary>사선 메움 면의 높이·머티리얼을 실제 타일에서 잰다. 못 재면 바운즈 값과 첫 머티리얼로 대신한다.</summary>
