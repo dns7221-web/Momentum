@@ -2,6 +2,11 @@
 
 물리 기반 웹 스윙(web-swinging) 이동 시스템.
 
+> **이 저장소는 코드·문서 공개판이다.** 캐릭터·도시·소품·애니메이션·소리 같은 외부 에셋과
+> 씬은 라이선스 때문에 뺐다. 받아서 열어도 바로 플레이되지 않는다 — 직접 짠 C# 스크립트
+> (`Assets/Project/Scripts`)와 설계·작업 기록을 보는 용도다. 사용한 에셋은 맨 아래
+> [사용한 에셋](#사용한-에셋)에 있다.
+
 > 날짜별 조사 · 구현 · 버그 수정 전체 기록은 **[DEVLOG.md](DEVLOG.md)**에 있다.
 > 10월부터의 스파이더맨 업그레이드 작업은 **[DEVLOG-SPIDERMAN-UPGRADE.md](DEVLOG-SPIDERMAN-UPGRADE.md)**에 따로 모았다.
 > 전체 작업을 짧게 보려면 **[작업 기록 한눈에 보기](DEVLOG-SUMMARY.md)**.
@@ -519,16 +524,9 @@ grep m_Mask Assets/Project/AnimationFold/Throw.mask
 
 ## 참고
 
-3D 에셋은 Git LFS로 관리한다. 클론 후:
-
-```bash
-git lfs install
-git lfs pull
-```
-
-**도시는 씬에 저장되어 있지 않다.** `Assets/Scenes/MomentumScene.unity`를 열고
-`CityGenerator`의 `Generate`를 누르면 프리셋에서 도시가 재생성된다.
-시드 기반이므로 어느 머신에서도 같은 결과가 나온다.
+공개판에는 3D 에셋과 씬이 없다. 원본 작업 저장소는 비공개이고, 거기서는 3D 에셋을
+Git LFS로 관리한다. 도시는 `CityGenerator`·`CityPlanGenerator`가 시드와 도시 계획
+(`Assets/Project/CityPlan_v3.asset`)으로 다시 세우므로 어느 머신에서도 같은 결과가 나온다.
 
 에디터 도구는 `Momentum` 메뉴에 있다.
 
@@ -540,3 +538,16 @@ git lfs pull
 | 선택한 애니메이션 FBX를 Humanoid로 설정 | 재타겟팅 전제 조건을 일괄 적용 |
 | 선택한 애니메이션 세트로 Animator Controller 만들기 | 블렌드 트리 + 점프 사슬 자동 생성 |
 | 제자리 포즈로 고정 ▸ 지상 이동 / 점프·공중 | 루트 트랜스폼 일괄 — 좌우 흔들림 제거 |
+
+## 사용한 에셋
+
+공개판에는 들어 있지 않다. 원본 작업 저장소에서 쓴 것들이다.
+
+| 구분 | 에셋 |
+|---|---|
+| 도시 | Quaternius — Downtown City MegaKit / Kenney — City Kit (CC0) |
+| 캐릭터 | JBlue — Security Officer |
+| 애니메이션 | Mixamo / Quaternius — Universal Animation Library 2 (CC0) / MoCap Online 무료 샘플러 |
+| 소품 | Poly Haven — Plastic Bottle Gallon (CC0) / "Freight shipping container - Rusted" by sousinho (Sketchfab, CC BY) |
+| 이펙트 | Kenney — Particle Pack (CC0) |
+| 효과음 | Pixabay |
