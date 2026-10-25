@@ -2,6 +2,10 @@
 
 물리 기반 웹 스윙(web-swinging) 이동 시스템.
 
+[![Momentum 기능 소개 영상](https://img.youtube.com/vi/yeARoo487YE/maxresdefault.jpg)](https://youtu.be/yeARoo487YE)
+
+**기능 소개 영상 (55초):** <https://youtu.be/yeARoo487YE> — 웹스윙 · 다이브 · 포인트 런치 · 웹 슬링샷 · 웹 집 · 상황별 카메라
+
 > **이 저장소는 코드·문서 공개판이다.** 캐릭터·도시·소품·애니메이션·소리 같은 외부 에셋과
 > 씬은 라이선스 때문에 뺐다. 받아서 열어도 바로 플레이되지 않는다 — 직접 짠 C# 스크립트
 > (`Assets/Project/Scripts`)와 설계·작업 기록을 보는 용도다. 사용한 에셋은 맨 아래
